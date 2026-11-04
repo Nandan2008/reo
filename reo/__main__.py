@@ -8,11 +8,17 @@ from .speak import speak
 EXIT_PHRASES = {"goodbye", "bye", "exit", "quit", "stop listening", "goodbye reo", "bye reo"}
 
 
+def normalize(text: str) -> str:
+    """Strip Whisper's punctuation and spacing so phrases match."""
+    kept = "".join(c if c.isalnum() else " " for c in text.lower())
+    return " ".join(kept.split())
+
+
 def main():
     # Windows consoles are cp1252; replies often hold characters it cannot encode
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    if not config.LLM_API_KEY:
+    if not config.LLM_API_KEY or config.LLM_API_KEY == "your-groq-key-here":
         print("Missing LLM_API_KEY. Copy .env.example to .env and add your free Groq key.")
         return
 
@@ -26,12 +32,12 @@ def main():
             break
         print("Listening...")
         text = listener.listen()
-        if not text:
+        if not any(c.isalnum() for c in text):
             print("(didn't catch that)")
             continue
         print(f"You: {text}")
 
-        if text.lower().strip(" .!?,") in EXIT_PHRASES:
+        if normalize(text) in EXIT_PHRASES:
             speak("Goodbye.")
             break
 
