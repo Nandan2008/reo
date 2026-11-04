@@ -40,6 +40,17 @@ Double-click **install-startup.bat**. reo starts minimized whenever you sign in.
 **uninstall-startup.bat** undoes it. Both just add or remove one shortcut in your
 Startup folder - nothing is installed into Windows itself.
 
+## Languages
+
+Speak to it in any of the ~99 languages Whisper knows and it answers in the same
+one. Nothing to configure - the language is detected each time. Pin it with
+`REO_LANGUAGE=hi` (or `en`, `te`, `es` ...) if you only ever use one, which is
+slightly faster and more accurate.
+
+The voice is the limit, not the understanding: Windows only has English voices
+installed here, so a Hindi reply is spoken by an English voice. Adding a language
+pack in Windows Settings gives it a real one, and `REO_VOICE` picks it.
+
 ## Emotions
 
 Reo tags each reply with a feeling ([happy], [sad], [amused], [apologetic], ...) and
@@ -79,5 +90,6 @@ emotion tags, tool failures, and history trimming keeping tool calls paired.
 - "Rate limit" errors: you hit the free tier's per-minute limit. Wait a minute, or switch LLM_MODEL to a smaller model.
 - "Model does not exist" errors: Groq retires models. Pick a current chat model from
   https://console.groq.com/docs/models and set LLM_MODEL in .env.
-- Reo mishears words: set REO_WHISPER_MODEL=small.en in .env (more accurate, slower).
+- Reo mishears words: set REO_WHISPER_MODEL=small in .env (more accurate, slower).
+- Only ever speaking English? Set REO_LANGUAGE=en to skip detection and sharpen it.
 - To switch providers (Gemini, OpenRouter, local Ollama), change LLM_BASE_URL / LLM_MODEL in .env. No code changes needed.

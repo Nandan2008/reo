@@ -10,29 +10,40 @@ from reo import config
 from reo.text import normalize
 
 BLOCK = 0.1
-SECONDS = 8
+SECONDS = 6
+
+
+PHRASE = "Reo, what time is it?"
 
 
 def meter():
     print(f"Default input : {sd.query_devices(kind='input')['name']}")
     print(f"Threshold     : {config.SILENCE_THRESHOLD}")
     print()
-    print(f"Speak normally for {SECONDS} seconds - say \"Reo, what time is it?\" a couple of times.")
-    print("A bar means the audio is loud enough to wake reo.")
+    print("When you press Enter, this records for 6 seconds.")
+    print(f'Say this, clearly, close to the laptop:  "{PHRASE}"')
+    print("Say it twice if you have time. Do not speak before pressing Enter.")
+    try:
+        print()
+        input("Press Enter when you are ready to speak  ")
+    except (KeyboardInterrupt, EOFError):
+        raise SystemExit("cancelled")
     print()
+    print("RECORDING - speak now")
 
     block = int(config.SAMPLE_RATE * BLOCK)
     frames, levels = [], []
     with sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1,
                         dtype="float32", blocksize=block) as stream:
-        for _ in range(int(SECONDS / BLOCK)):
+        for i in range(int(SECONDS / BLOCK)):
             data, _ = stream.read(block)
             frames.append(data.copy())
             rms = float(np.sqrt(np.mean(data ** 2)))
             levels.append(rms)
-            over = rms > config.SILENCE_THRESHOLD
-            bar = "#" * min(int(rms * 400), 50)
-            print(f"  {rms:7.4f} {'OVER ' if over else '     '}{bar}")
+            if i % 2 == 0:
+                bar = "#" * min(int(rms * 400), 50)
+                print(f"  {rms:7.4f} {'OVER ' if rms > config.SILENCE_THRESHOLD else '     '}{bar}")
+    print("done")
 
     return np.concatenate(frames).flatten(), levels
 

@@ -2,7 +2,11 @@
 import re
 import unittest
 
+import numpy as np
+
 from reo import tools
+from reo.audio import looks_hallucinated
+from reo.audio import normalize as normalize_gain
 from reo.__main__ import EXIT_PHRASES
 from reo.text import is_speech, normalize
 from reo.brain import SYSTEM, Brain
@@ -64,7 +68,7 @@ class WakeWord(unittest.TestCase):
     @staticmethod
     def _match(heard):
         from reo.wake import WakeListener
-        return WakeListener._command_after_wake(None, heard)
+        return WakeListener._command_after_wake(heard)
 
     def test_command_said_with_the_name(self):
         self.assertEqual(self._match("Reo, what time is it?"), "what time is it")
@@ -86,6 +90,42 @@ class WakeWord(unittest.TestCase):
 
     def test_name_mid_sentence_still_counts(self):
         self.assertEqual(self._match("okay reo open notepad"), "open notepad")
+
+
+class Hallucinations(unittest.TestCase):
+    """Whisper loops a phrase when there is too little real speech. These are
+    verbatim from reo's own logs on a weak microphone."""
+
+    def test_repeats_are_rejected(self):
+        for text in [
+            "I'm going to put it in the middle.  I'm going to put it in the middle.  I'm going to put it in the middle.",
+            "That's what it is.  That's what it is.  That's what it is.",
+            "Hello how are you? Hello how are you?",
+        ]:
+            with self.subTest(text=text[:30]):
+                self.assertTrue(looks_hallucinated(text))
+
+    def test_real_speech_survives(self):
+        for text in ["Reo, what time is it?", "open notepad",
+                     "I'm fine. How are you?", "", "Yes."]:
+            with self.subTest(text=text):
+                self.assertFalse(looks_hallucinated(text))
+
+
+class Gain(unittest.TestCase):
+    def test_quiet_audio_is_lifted(self):
+        """0.1 is about what a laptop mic gives; 5x gain is within the cap."""
+        quiet = np.full(100, 0.1, dtype=np.float32)
+        self.assertAlmostEqual(float(np.max(np.abs(normalize_gain(quiet)))), 0.5, places=3)
+
+    def test_silence_is_left_alone(self):
+        silent = np.zeros(100, dtype=np.float32)
+        self.assertEqual(float(np.max(np.abs(normalize_gain(silent)))), 0.0)
+
+    def test_gain_is_capped(self):
+        """Amplifying near-silence just makes louder noise."""
+        nearly = np.full(100, 0.001, dtype=np.float32)
+        self.assertLess(float(np.max(np.abs(normalize_gain(nearly)))), 0.5)
 
 
 class ToolFailures(unittest.TestCase):

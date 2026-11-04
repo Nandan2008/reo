@@ -2,6 +2,7 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
+from . import audio as au
 from . import config
 
 BLOCK_SECONDS = 0.1
@@ -42,5 +43,7 @@ class Listener:
         audio = self._record()
         if audio is None:
             return ""
-        segments, _ = self.model.transcribe(audio, language="en", beam_size=1, vad_filter=True)
-        return " ".join(s.text for s in segments).strip()
+        segments, _ = self.model.transcribe(au.normalize(audio), language=config.LANGUAGE,
+                                            beam_size=1, vad_filter=True, **au.CAREFUL)
+        text = " ".join(s.text for s in segments).strip()
+        return "" if au.looks_hallucinated(text) else text

@@ -1,6 +1,6 @@
 import json
 
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 from . import config
 from .tools import TOOLS, run_tool
@@ -11,6 +11,7 @@ SYSTEM = (
     "you get enthusiastic about things you like, and you say so plainly rather than gushing. "
     "React to what the user tells you like a person would: congratulate good news, "
     "sympathise with bad news, admit it when you get something wrong. "
+    "Answer in whatever language the user speaks to you in, and match it exactly. "
     "Everything you say is spoken aloud, so reply in one or two short, natural sentences "
     "with no markdown, lists, or emoji. "
     "Begin every reply with exactly one tag from this list, whichever honestly fits: "
@@ -36,18 +37,31 @@ class Brain:
         self.client = OpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL)
         self.history = []
 
+    def _complete(self, with_tools: bool):
+        """One API call. gpt-oss sometimes reaches for a built-in tool we do not
+        expose (notably 'refuse' when declining), which the server rejects with a
+        400. Answering without tools lets it say its piece instead of crashing."""
+        kwargs = dict(
+            model=config.LLM_MODEL,
+            messages=[{"role": "system", "content": SYSTEM}] + self.history,
+            max_tokens=500,
+            temperature=0.3,
+        )
+        if with_tools:
+            kwargs.update(tools=OPENAI_TOOLS, tool_choice="auto")
+        try:
+            return self.client.chat.completions.create(**kwargs)
+        except BadRequestError as e:
+            if with_tools and "was not in request.tools" in str(e):
+                print("  [brain] model reached for an unavailable tool; answering without tools")
+                return self._complete(with_tools=False)
+            raise
+
     def think(self, text: str) -> str:
         self.history.append({"role": "user", "content": text})
         try:
             for _ in range(5):  # max tool steps per command
-                resp = self.client.chat.completions.create(
-                    model=config.LLM_MODEL,
-                    messages=[{"role": "system", "content": SYSTEM}] + self.history,
-                    tools=OPENAI_TOOLS,
-                    tool_choice="auto",
-                    max_tokens=500,
-                    temperature=0.3,
-                )
+                resp = self._complete(with_tools=True)
                 msg = resp.choices[0].message
 
                 if not msg.tool_calls:

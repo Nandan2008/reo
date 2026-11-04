@@ -10,11 +10,25 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
+from . import audio as au
 from . import config
 from .text import normalize
 
 BLOCK_SECONDS = 0.1
 LEAD_IN_SECONDS = 0.5  # keep audio from just before the first loud block, or "Reo" gets clipped
+
+
+def _within_one_edit(a: str, b: str) -> bool:
+    """True if one insertion, deletion or substitution turns a into b."""
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) <= 1
+    short, long = (a, b) if len(a) < len(b) else (b, a)
+    for i in range(len(long)):
+        if short == long[:i] + long[i + 1:]:
+            return True
+    return False
 
 
 class WakeListener:
@@ -23,15 +37,27 @@ class WakeListener:
         self.model = WhisperModel(config.WAKE_MODEL, device="cpu", compute_type="int8")
 
     def _transcribe(self, frames) -> str:
-        audio = np.concatenate(frames).flatten()
-        segments, _ = self.model.transcribe(audio, language="en", beam_size=1, vad_filter=True)
-        return " ".join(s.text for s in segments).strip()
+        clip = au.normalize(np.concatenate(frames).flatten())
+        segments, _ = self.model.transcribe(clip, language=config.LANGUAGE, beam_size=1,
+                                            vad_filter=True, **au.CAREFUL)
+        text = " ".join(s.text for s in segments).strip()
+        return "" if au.looks_hallucinated(text) else text
 
-    def _command_after_wake(self, text: str):
+    @staticmethod
+    def _is_name(word: str) -> bool:
+        if word in config.WAKE_WORDS:
+            return True
+        if not config.WAKE_FUZZY or not 3 <= len(word) <= 5:
+            return False
+        # one wrong letter is the difference between hearing "reo" and "rio"
+        return any(_within_one_edit(word, name) for name in config.WAKE_WORDS)
+
+    @staticmethod
+    def _command_after_wake(text: str):
         """Return what was said after the wake word, "" if nothing, None if not addressed."""
         words = normalize(text).split()
         for i, word in enumerate(words):
-            if word in config.WAKE_WORDS:
+            if WakeListener._is_name(word):
                 return " ".join(words[i + 1:])
         return None
 
@@ -65,7 +91,7 @@ class WakeListener:
 
                 if silent >= silence_blocks or len(frames) >= max_blocks:
                     heard = self._transcribe(frames)
-                    command = self._command_after_wake(heard)
+                    command = WakeListener._command_after_wake(heard)
                     if command is not None:
                         return command
                     # show what was discarded, or a silent mic looks identical to
