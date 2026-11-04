@@ -3,7 +3,8 @@ import re
 import unittest
 
 from reo import tools
-from reo.__main__ import EXIT_PHRASES, is_speech, normalize
+from reo.__main__ import EXIT_PHRASES
+from reo.text import is_speech, normalize
 from reo.brain import SYSTEM, Brain
 from reo.speak import VOICE_SETTINGS, split_emotion
 
@@ -55,6 +56,36 @@ class EmotionTags(unittest.TestCase):
         promised = set(re.findall(r"\[(\w+)]", SYSTEM))
         self.assertTrue(promised, "no tags found in the system prompt")
         self.assertEqual(promised - set(VOICE_SETTINGS), set())
+
+
+class WakeWord(unittest.TestCase):
+    """What follows the name is the command; everything else is overheard chatter."""
+
+    @staticmethod
+    def _match(heard):
+        from reo.wake import WakeListener
+        return WakeListener._command_after_wake(None, heard)
+
+    def test_command_said_with_the_name(self):
+        self.assertEqual(self._match("Reo, what time is it?"), "what time is it")
+        self.assertEqual(self._match(" reo open notepad"), "open notepad")
+
+    def test_name_alone_returns_empty(self):
+        self.assertEqual(self._match("Reo?"), "")
+        self.assertEqual(self._match(" Reo."), "")
+
+    def test_mishearings_still_wake(self):
+        for heard in ["Rio, what time is it?", "Rayo what time is it"]:
+            with self.subTest(heard=heard):
+                self.assertEqual(self._match(heard), "what time is it")
+
+    def test_not_addressed_is_ignored(self):
+        for heard in ["what time is it?", "I was talking to Sam about the weather", ""]:
+            with self.subTest(heard=heard):
+                self.assertIsNone(self._match(heard))
+
+    def test_name_mid_sentence_still_counts(self):
+        self.assertEqual(self._match("okay reo open notepad"), "open notepad")
 
 
 class ToolFailures(unittest.TestCase):

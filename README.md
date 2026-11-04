@@ -23,7 +23,22 @@ Voice assistant for Windows. Day 1: push-to-talk voice loop with a free open-sou
    python -m reo
    ```
 
-Press Enter, speak, pause. Say "goodbye" to exit.
+By default reo listens all the time and answers to its name:
+
+> "Reo, what time is it?"
+
+Say the command in the same breath, or just say "Reo" and wait to be asked. Say
+"goodbye" to exit. Set `REO_MODE=push` in `.env` to go back to pressing Enter first.
+
+The microphone is open the whole time, but nothing is transcribed until you stop
+speaking, and the transcription happens on this machine. Only a command you actually
+address to reo is sent anywhere.
+
+## Start it when I sign in
+
+Double-click **install-startup.bat**. reo starts minimized whenever you sign in.
+**uninstall-startup.bat** undoes it. Both just add or remove one shortcut in your
+Startup folder - nothing is installed into Windows itself.
 
 ## Emotions
 

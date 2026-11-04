@@ -23,3 +23,15 @@ WAIT_FOR_SPEECH_SECONDS = 6  # give up if you say nothing
 MAX_RECORD_SECONDS = 20
 
 MAX_HISTORY_MESSAGES = 20
+
+# "wake" listens all the time and answers to its name; "push" waits for Enter.
+MODE = os.getenv("REO_MODE", "wake")
+# A small model is plenty for spotting one word, and keeps the idle cost down.
+WAKE_MODEL = os.getenv("REO_WAKE_MODEL", "tiny.en")
+# Whisper hears "reo" several ways, so accept the near misses.
+_wake = [w.strip().lower() for w in
+         os.getenv("REO_WAKE_WORDS", "reo,rio,rayo,reyo").split(",") if w.strip()]
+WAKE_NAME = _wake[0] if _wake else "reo"   # what it calls itself
+WAKE_WORDS = set(_wake)                     # what it answers to
+WAKE_SILENCE_SECONDS = 0.6   # shorter than a command pause: just end-of-sentence
+WAKE_MAX_SECONDS = 8
