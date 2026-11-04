@@ -25,6 +25,21 @@ Voice assistant for Windows. Day 1: push-to-talk voice loop with a free open-sou
 
 Press Enter, speak, pause. Say "goodbye" to exit.
 
+## Emotions
+
+Reo tags each reply with a feeling ([happy], [sad], [amused], [apologetic], ...) and
+speaks it at a matching pace and volume. The tag is stripped before it talks, so you
+only ever see it in the printed line.
+
+For a genuinely expressive voice instead of the flat offline one:
+
+1. Accept the model terms at
+   https://console.groq.com/playground?model=canopylabs/orpheus-v1-english
+2. Set `REO_TTS=orpheus` in `.env`.
+
+It costs a second or two per reply. If the model is unreachable Reo says so once and
+falls back to the offline voice, so this is safe to leave switched on.
+
 ## Try saying
 - "Open notepad"
 - "What time is it?"
