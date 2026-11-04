@@ -1,3 +1,5 @@
+import sys
+
 from . import config
 from .brain import Brain
 from .listen import Listener
@@ -7,6 +9,9 @@ EXIT_PHRASES = {"goodbye", "bye", "exit", "quit", "stop listening", "goodbye reo
 
 
 def main():
+    # Windows consoles are cp1252; replies often hold characters it cannot encode
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     if not config.LLM_API_KEY:
         print("Missing LLM_API_KEY. Copy .env.example to .env and add your free Groq key.")
         return
