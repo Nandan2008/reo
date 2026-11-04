@@ -64,8 +64,12 @@ class WakeListener:
                     silent += 1
 
                 if silent >= silence_blocks or len(frames) >= max_blocks:
-                    command = self._command_after_wake(self._transcribe(frames))
+                    heard = self._transcribe(frames)
+                    command = self._command_after_wake(heard)
                     if command is not None:
                         return command
+                    # show what was discarded, or a silent mic looks identical to
+                    # one that simply never hears its name
+                    print(f'  (heard "{heard}")' if heard else "  (heard nothing usable)")
                     lead_in.clear()
                     frames, speaking, silent = [], False, 0
