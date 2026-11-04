@@ -1,6 +1,6 @@
 # reo
 
-Voice assistant for Windows. Day 1: push-to-talk voice loop with a free open-source LLM (Llama on Groq) + basic tools.
+Voice assistant for Windows. Day 1: push-to-talk voice loop with a free open-source LLM (gpt-oss on Groq) + basic tools.
 
 ## Quick start (easiest)
 
@@ -9,7 +9,7 @@ Voice assistant for Windows. Day 1: push-to-talk voice loop with a free open-sou
 
 ## Manual setup (Windows, PowerShell)
 
-1. Install Python 3.11 or 3.12 from python.org (tick "Add to PATH").
+1. Install Python 3.11 or newer from python.org (tick "Add to PATH"). Tested on 3.14.
 2. In this folder:
    ```
    python -m venv .venv
@@ -37,4 +37,7 @@ Press Enter, speak, pause. Say "goodbye" to exit.
 - It cuts you off or never stops listening: raise it (e.g. 0.02).
 - Wrong mic: set your default input device in Windows Sound settings.
 - "Rate limit" errors: you hit the free tier's per-minute limit. Wait a minute, or switch LLM_MODEL to a smaller model.
+- "Model does not exist" errors: Groq retires models. Pick a current chat model from
+  https://console.groq.com/docs/models and set LLM_MODEL in .env.
+- Reo mishears words: set REO_WHISPER_MODEL=small.en in .env (more accurate, slower).
 - To switch providers (Gemini, OpenRouter, local Ollama), change LLM_BASE_URL / LLM_MODEL in .env. No code changes needed.
