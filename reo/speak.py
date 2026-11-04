@@ -35,10 +35,21 @@ def split_emotion(text: str) -> tuple[str, str]:
     return (emotion if emotion in VOICE_SETTINGS else "neutral"), text[match.end():].strip()
 
 
+def _pick_voice(engine) -> None:
+    if not config.VOICE_NAME:
+        return
+    wanted = config.VOICE_NAME.lower()
+    for voice in engine.getProperty("voices"):
+        if wanted in voice.name.lower() or wanted in voice.id.lower():
+            engine.setProperty("voice", voice.id)
+            return
+
+
 def _speak_pyttsx3(text: str, emotion: str) -> None:
     rate, volume = VOICE_SETTINGS[emotion]
     # A fresh engine per call avoids a known pyttsx3 hang on Windows
     engine = pyttsx3.init()
+    _pick_voice(engine)
     engine.setProperty("rate", rate)
     engine.setProperty("volume", volume)
     engine.say(text)

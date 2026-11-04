@@ -33,6 +33,9 @@ class Listener:
                         break
                 elif i >= wait_blocks:
                     return None
+            else:
+                if heard:
+                    print(f"  (stopped at the {config.MAX_RECORD_SECONDS} second limit)")
         return np.concatenate(frames).flatten() if heard else None
 
     def listen(self) -> str:

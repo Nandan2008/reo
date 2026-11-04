@@ -8,6 +8,11 @@ from .speak import speak
 EXIT_PHRASES = {"goodbye", "bye", "exit", "quit", "stop listening", "goodbye reo", "bye reo"}
 
 
+def is_speech(text: str) -> bool:
+    """Whisper emits bare punctuation on room noise; that is not worth an API call."""
+    return any(c.isalnum() for c in text)
+
+
 def normalize(text: str) -> str:
     """Strip Whisper's punctuation and spacing so phrases match."""
     kept = "".join(c if c.isalnum() else " " for c in text.lower())
@@ -32,7 +37,7 @@ def main():
             break
         print("Listening...")
         text = listener.listen()
-        if not any(c.isalnum() for c in text):
+        if not is_speech(text):
             print("(didn't catch that)")
             continue
         print(f"You: {text}")

@@ -52,6 +52,9 @@ class Brain:
 
                 if not msg.tool_calls:
                     reply = (msg.content or "").strip()
+                    if not reply and resp.choices[0].finish_reason == "length":
+                        # reasoning models can spend max_tokens before saying anything
+                        reply = "I ran out of room before I could answer. Ask me again more simply."
                     self.history.append({"role": "assistant", "content": reply})
                     return reply
 

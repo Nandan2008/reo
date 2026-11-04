@@ -13,6 +13,8 @@ WHISPER_MODEL = os.getenv("REO_WHISPER_MODEL", "base.en")
 TTS_BACKEND = os.getenv("REO_TTS", "pyttsx3")
 TTS_MODEL = os.getenv("REO_TTS_MODEL", "canopylabs/orpheus-v1-english")
 TTS_VOICE = os.getenv("REO_TTS_VOICE", "tara")
+# Which installed Windows voice to use; matched against its name. Blank = system default.
+VOICE_NAME = os.getenv("REO_VOICE", "zira")
 
 SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = float(os.getenv("REO_SILENCE_THRESHOLD", "0.01"))

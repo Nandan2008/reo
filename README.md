@@ -40,6 +40,16 @@ For a genuinely expressive voice instead of the flat offline one:
 It costs a second or two per reply. If the model is unreachable Reo says so once and
 falls back to the offline voice, so this is safe to leave switched on.
 
+## Tests
+
+```
+python -m unittest discover -s tests -t .
+```
+
+Fifteen tests, no microphone or API key needed. They cover the things that broke
+during setup: exit phrases with punctuation inside them, noise transcriptions,
+emotion tags, tool failures, and history trimming keeping tool calls paired.
+
 ## Try saying
 - "Open notepad"
 - "What time is it?"
