@@ -33,6 +33,13 @@ def _tee_to_logfile():
     sys.stdout = Tee()
 
 
+def woken_by() -> str:
+    """What to tell the user to say, which depends on the wake engine."""
+    if config.WAKE_ENGINE == "phrase":
+        return config.WAKE_PHRASE.replace("_", " ")
+    return config.WAKE_NAME
+
+
 def handle(brain, text: str, ui=None) -> bool:
     """Answer one command. Returns False when it is time to stop."""
     print(f"You: {text}")
@@ -67,8 +74,12 @@ def main():
 
     waker = toggle = combination = None
     if config.MODE == "wake":
-        from .wake import WakeListener
-        waker = WakeListener()
+        if config.WAKE_ENGINE == "phrase":
+            from .phrase import PhraseListener
+            waker = PhraseListener(listener)
+        else:
+            from .wake import WakeListener
+            waker = WakeListener()
     elif config.MODE == "hotkey":
         from .hotkey import Toggle, describe
         combination = describe()
@@ -80,7 +91,7 @@ def main():
     if config.UI:
         from .ui import Display
         hint = {"hotkey": f"{combination} to listen",
-                "wake": f'say "{config.WAKE_NAME}"',
+                "wake": f'say "{woken_by()}"',
                 "push": "press Enter in the console"}.get(config.MODE, "")
         ui = Display(subtitle=hint)
         ui.run(lambda: _loop(listener, brain, waker, toggle, combination, ui))
@@ -106,10 +117,10 @@ def _loop(listener, brain, waker, toggle, combination, ui):
                 if not toggle.listening:
                     continue          # switched off while it was recording
             elif waker:
-                print(f'\n[Listening for "{config.WAKE_NAME}"]')
+                print(f'\n[Listening for "{woken_by()}"]')
                 text = waker.wait()
                 if not is_speech(text):
-                    # addressed by name with nothing after it
+                    # woken with nothing after it, so ask what they want
                     speak("[happy] Yes?", ui)
                     if ui:
                         ui.set_state("listening")

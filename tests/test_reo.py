@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from reo import tools
+from reo import config, tools
 from reo.audio import looks_hallucinated
 from reo.audio import normalize as normalize_gain
 from reo.__main__ import EXIT_PHRASES
@@ -27,6 +27,18 @@ class ExitPhrases(unittest.TestCase):
                      " What time is it?", " Open notepad."]:
             with self.subTest(said=said):
                 self.assertNotIn(normalize(said), EXIT_PHRASES)
+
+
+class WokenBy(unittest.TestCase):
+    """The prompt must name whatever actually wakes it."""
+
+    def test_follows_the_engine(self):
+        from unittest import mock
+        from reo.__main__ import woken_by
+        with mock.patch.object(config, "WAKE_ENGINE", "phrase"),              mock.patch.object(config, "WAKE_PHRASE", "hey_jarvis"):
+            self.assertEqual(woken_by(), "hey jarvis")
+        with mock.patch.object(config, "WAKE_ENGINE", "whisper"),              mock.patch.object(config, "WAKE_NAME", "reo"):
+            self.assertEqual(woken_by(), "reo")
 
 
 class NoiseFilter(unittest.TestCase):

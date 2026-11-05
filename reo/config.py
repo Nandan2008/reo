@@ -36,7 +36,14 @@ MODE = os.getenv("REO_MODE", "hotkey")
 UI = os.getenv("REO_UI", "1") not in ("0", "false", "no")
 # pynput spelling: <ctrl> <alt> <shift> <cmd> plus a letter.
 HOTKEY = os.getenv("REO_HOTKEY", "<ctrl>+<alt>+r")
-# A small model is plenty for spotting one word, and keeps the idle cost down.
+# Wake detection: "phrase" uses a model trained on the wake word itself and is
+# far more reliable; "whisper" transcribes the room and looks for a name, which
+# allows a custom name but needs a clean microphone.
+WAKE_ENGINE = os.getenv("REO_WAKE_ENGINE", "phrase")
+# openWakeWord ships: hey_jarvis, alexa, hey_mycroft, hey_rhasspy
+WAKE_PHRASE = os.getenv("REO_WAKE_PHRASE", "hey_jarvis")
+WAKE_THRESHOLD = float(os.getenv("REO_WAKE_THRESHOLD", "0.5"))
+# Used only by the whisper engine: a small model keeps the idle cost down.
 WAKE_MODEL = os.getenv("REO_WAKE_MODEL", "tiny")
 # Whisper hears "reo" several ways, so accept the near misses.
 _wake = [w.strip().lower() for w in

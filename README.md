@@ -34,8 +34,15 @@ Three ways to summon it, set by `REO_MODE` in `.env`:
 | `wake` | Always listening, answers to "Reo, what time is it?" |
 | `push` | Press Enter in its window first. |
 
-`wake` needs a microphone with a clean signal - a laptop array mic often is not
-enough, and reo then mishears the room rather than you.
+`wake` listens for **"Hey Jarvis"** using openWakeWord, a model trained on that one
+phrase. It only has to recognise a sound, not transcribe the room, so it works where
+the older approach did not: on synthesised speech it scores 0.998 for the phrase and
+0.000 for unrelated sentences.
+
+The pretrained phrases are `hey_jarvis`, `alexa`, `hey_mycroft` and `hey_rhasspy`;
+pick one with `REO_WAKE_PHRASE`. For a custom name, `REO_WAKE_ENGINE=whisper` goes
+back to transcribing and matching `REO_WAKE_WORDS` - which allows any name, but needs
+a cleaner microphone than a laptop array usually gives.
 
 The microphone is only open while it is listening, nothing is transcribed until you
 stop speaking, and the transcription happens on this machine. Only a command you
