@@ -86,6 +86,16 @@ def get_battery() -> str:
     return f"{b.percent:.0f}% ({'charging' if b.power_plugged else 'on battery'})"
 
 
+def type_text(text: str, window: str = None) -> str:
+    from .keys import type_text as _type
+    return _type(text, window)
+
+
+def list_windows() -> str:
+    from .keys import list_windows as _list
+    return _list()
+
+
 def run_command(command: str, confirmed: bool = False) -> str:
     from .shell import run_command as _run
     return _run(command, confirmed)
@@ -98,6 +108,8 @@ FUNCTIONS = {
     "open_search": open_search,
     "read_page": read_page,
     "run_command": run_command,
+    "type_text": type_text,
+    "list_windows": list_windows,
     "get_datetime": get_datetime,
     "get_battery": get_battery,
 }
@@ -133,6 +145,26 @@ TOOLS = [
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
         },
+    },
+    {
+        "name": "type_text",
+        "description": ("Type text into another program. It brings that window to the "
+                        "front first, so the text lands where the user meant. Name the "
+                        "window loosely: 'claude', 'notepad', 'chrome'."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "What to type"},
+                "window": {"type": "string",
+                           "description": "Part of the target window's title"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "list_windows",
+        "description": "List the titles of open windows, to find what to type into.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "run_command",

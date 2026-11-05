@@ -149,6 +149,37 @@ class Gain(unittest.TestCase):
         self.assertLess(float(np.max(np.abs(normalize_gain(nearly)))), 0.5)
 
 
+class Typing(unittest.TestCase):
+    """Decided without touching a real window: guessing typed into the wrong
+    Notepad tab once, and into an audio control panel once."""
+
+    @staticmethod
+    def _type(powershell_says, text="hello", window="notepad"):
+        from unittest import mock
+        from reo import keys
+        with mock.patch.object(keys, "_powershell", return_value=powershell_says):
+            return keys.type_text(text, window)
+
+    def test_several_matches_types_nothing(self):
+        out = self._type("MANY:Notes - Notepad|config - Notepad")
+        self.assertIn("nothing was typed", out)
+        self.assertIn("Notes - Notepad", out)
+
+    def test_one_match_is_typed(self):
+        self.assertIn("Notes - Notepad", self._type("TYPED:Notes - Notepad"))
+
+    def test_no_window_named_types_nothing(self):
+        from unittest import mock
+        from reo import keys
+        with mock.patch.object(keys, "list_windows", return_value="Notepad"):
+            self.assertIn("Say which window", keys.type_text("hello"))
+
+    def test_sendkeys_specials_are_escaped(self):
+        from reo.keys import escape
+        self.assertEqual(escape("50% (a)+b"), "50{%} {(}a{)}{+}b")
+        self.assertEqual(escape("plain text"), "plain text")
+
+
 class ShellGuards(unittest.TestCase):
     """Voice mishears and web pages can steer a model, so these matter.
 

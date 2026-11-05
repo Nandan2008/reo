@@ -21,7 +21,7 @@ VOICE_NAME = os.getenv("REO_VOICE", "zira")
 
 SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = float(os.getenv("REO_SILENCE_THRESHOLD", "0.01"))
-SILENCE_SECONDS = 1.2        # pause length that means "I'm done talking"
+SILENCE_SECONDS = float(os.getenv("REO_SILENCE_SECONDS", "0.7"))  # pause that means "done talking"
 WAIT_FOR_SPEECH_SECONDS = 6  # give up if you say nothing
 MAX_RECORD_SECONDS = 20
 
