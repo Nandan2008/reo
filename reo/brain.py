@@ -70,7 +70,7 @@ class Brain:
     def think(self, text: str) -> str:
         self.history.append({"role": "user", "content": text})
         try:
-            for _ in range(5):  # max tool steps per command
+            for _ in range(10):  # max tool steps per command
                 resp = self._complete(with_tools=True)
                 msg = resp.choices[0].message
 

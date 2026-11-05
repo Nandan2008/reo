@@ -23,11 +23,13 @@ APPS = {
 
 
 def open_app(name: str) -> str:
-    target = APPS.get(name.lower().strip())
-    if not target:
-        return f"Not allowed or unknown app '{name}'. Allowed: {', '.join(sorted(APPS))}"
-    subprocess.Popen(f'start "" {target}', shell=True)  # target comes only from the whitelist
-    return f"Opened {name}."
+    from .apps import open_app as _open
+    return _open(name)
+
+
+def list_apps() -> str:
+    from .apps import list_apps as _list
+    return _list()
 
 
 def open_website(url: str) -> str:
@@ -103,6 +105,7 @@ def run_command(command: str, confirmed: bool = False) -> str:
 
 FUNCTIONS = {
     "open_app": open_app,
+    "list_apps": list_apps,
     "open_website": open_website,
     "search_web": search_web,
     "open_search": open_search,
@@ -117,12 +120,20 @@ FUNCTIONS = {
 TOOLS = [
     {
         "name": "open_app",
-        "description": "Open an application on the laptop. Allowed: " + ", ".join(sorted(APPS)),
+        "description": ("Open a program, or bring it to the front if it is already "
+                        "running. Searches what Windows itself can launch, Store apps "
+                        "included. Always use this to open something: do not go hunting "
+                        "for an .exe with run_command, which misses Store apps entirely."),
         "input_schema": {
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "App name, e.g. 'notepad'"}},
+            "properties": {"name": {"type": "string", "description": "e.g. 'notepad', 'claude'"}},
             "required": ["name"],
         },
+    },
+    {
+        "name": "list_apps",
+        "description": "List the programs Windows can launch, to find the right name.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "open_website",
