@@ -14,7 +14,8 @@ LANGUAGE = os.getenv("REO_LANGUAGE", "").strip() or None
 # terms accepted at console.groq.com and adds a second or two per reply.
 TTS_BACKEND = os.getenv("REO_TTS", "pyttsx3")
 TTS_MODEL = os.getenv("REO_TTS_MODEL", "canopylabs/orpheus-v1-english")
-TTS_VOICE = os.getenv("REO_TTS_VOICE", "tara")
+# Orpheus voices: autumn diana hannah austin daniel troy
+TTS_VOICE = os.getenv("REO_TTS_VOICE", "autumn")
 # Which installed Windows voice to use; matched against its name. Blank = system default.
 VOICE_NAME = os.getenv("REO_VOICE", "zira")
 
