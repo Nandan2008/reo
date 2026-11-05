@@ -26,13 +26,27 @@ TAG = re.compile(r"^\s*\[(\w+)]\s*")
 _orpheus_failed = False  # fall back quietly after the first failure
 
 
+ANY_TAG = re.compile(r"\[(\w+)]")
+
+
+def _undouble(text: str) -> str:
+    """gpt-oss sometimes emits its whole answer twice. Say it once."""
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s*", text) if p.strip()]
+    if len(parts) > 1 and len(set(parts)) == 1:
+        return parts[0]
+    return text
+
+
 def split_emotion(text: str) -> tuple[str, str]:
-    """Pull the brain's leading [emotion] tag off, so it is never spoken."""
-    match = TAG.match(text)
-    if not match:
-        return "neutral", text.strip()
-    emotion = match.group(1).lower()
-    return (emotion if emotion in VOICE_SETTINGS else "neutral"), text[match.end():].strip()
+    """Pull the brain's [emotion] tag off, so it is never spoken.
+
+    The tag belongs at the front, but the model sometimes repeats it mid-reply,
+    so every one is removed rather than just the first.
+    """
+    tags = ANY_TAG.findall(text)
+    emotion = next((t.lower() for t in tags if t.lower() in VOICE_SETTINGS), "neutral")
+    spoken = _undouble(ANY_TAG.sub("", text).strip())
+    return emotion, spoken
 
 
 def _pick_voice(engine) -> None:

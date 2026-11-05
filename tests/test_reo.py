@@ -52,6 +52,15 @@ class EmotionTags(unittest.TestCase):
         """An unknown tag must never be spoken aloud."""
         self.assertEqual(split_emotion("[banana] Hello."), ("neutral", "Hello."))
 
+    def test_doubled_reply_is_said_once(self):
+        """gpt-oss-120b sometimes repeats its whole answer, tag and all."""
+        self.assertEqual(
+            split_emotion("[neutral] It's 11:03 AM.[neutral] It's 11:03 AM."),
+            ("neutral", "It's 11:03 AM."))
+
+    def test_genuine_repetition_survives(self):
+        self.assertEqual(split_emotion("[neutral] Yes. No. Yes.")[1], "Yes. No. Yes.")
+
     def test_no_tag(self):
         self.assertEqual(split_emotion("Just words."), ("neutral", "Just words."))
 

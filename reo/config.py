@@ -5,7 +5,7 @@ load_dotenv()
 
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-20b")
+LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 WHISPER_MODEL = os.getenv("REO_WHISPER_MODEL", "base")
 # Blank detects the language each time. Set e.g. "en" or "hi" to pin it and save a step.
 LANGUAGE = os.getenv("REO_LANGUAGE", "").strip() or None
@@ -26,8 +26,13 @@ MAX_RECORD_SECONDS = 20
 
 MAX_HISTORY_MESSAGES = 20
 
-# "wake" listens all the time and answers to its name; "push" waits for Enter.
-MODE = os.getenv("REO_MODE", "wake")
+# How reo is summoned:
+#   "hotkey" - a key combination toggles listening on and off
+#   "wake"   - always listening, answers to its name
+#   "push"   - press Enter in its window first
+MODE = os.getenv("REO_MODE", "hotkey")
+# pynput spelling: <ctrl> <alt> <shift> <cmd> plus a letter.
+HOTKEY = os.getenv("REO_HOTKEY", "<ctrl>+<alt>+r")
 # A small model is plenty for spotting one word, and keeps the idle cost down.
 WAKE_MODEL = os.getenv("REO_WAKE_MODEL", "tiny")
 # Whisper hears "reo" several ways, so accept the near misses.

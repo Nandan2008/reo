@@ -61,16 +61,29 @@ def main():
 
     listener, brain = Listener(), Brain()
 
-    waker = None
+    waker = toggle = combination = None
     if config.MODE == "wake":
         from .wake import WakeListener
         waker = WakeListener()
+    elif config.MODE == "hotkey":
+        from .hotkey import Toggle, describe
+        combination = describe()
+        toggle = Toggle(on_change=lambda on: print(
+            f"\n[{combination}] {'listening' if on else 'stopped listening'}"))
+        toggle.start()
 
     speak("Reo online.")
 
     while True:
         try:
-            if waker:
+            if toggle:
+                if not toggle.listening:
+                    print(f"\n[Press {combination} to start listening]")
+                    toggle.wait_until_listening()
+                text = listener.listen()
+                if not toggle.listening:
+                    continue          # switched off while it was recording
+            elif waker:
                 print(f'\n[Listening for "{config.WAKE_NAME}"]')
                 text = waker.wait()
                 if not is_speech(text):

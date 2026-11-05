@@ -23,16 +23,23 @@ Voice assistant for Windows. Day 1: push-to-talk voice loop with a free open-sou
    python -m reo
    ```
 
-By default reo listens all the time and answers to its name:
+Press **Ctrl+Alt+R** anywhere, ask your question, and press it again to stop.
+The combination works whatever window you are in. Say "goodbye" to quit.
 
-> "Reo, what time is it?"
+Three ways to summon it, set by `REO_MODE` in `.env`:
 
-Say the command in the same breath, or just say "Reo" and wait to be asked. Say
-"goodbye" to exit. Set `REO_MODE=push` in `.env` to go back to pressing Enter first.
+| mode | how |
+| --- | --- |
+| `hotkey` | Ctrl+Alt+R toggles listening. The default. |
+| `wake` | Always listening, answers to "Reo, what time is it?" |
+| `push` | Press Enter in its window first. |
 
-The microphone is open the whole time, but nothing is transcribed until you stop
-speaking, and the transcription happens on this machine. Only a command you actually
-address to reo is sent anywhere.
+`wake` needs a microphone with a clean signal - a laptop array mic often is not
+enough, and reo then mishears the room rather than you.
+
+The microphone is only open while it is listening, nothing is transcribed until you
+stop speaking, and the transcription happens on this machine. Only a command you
+actually ask is sent anywhere.
 
 ## Start it when I sign in
 
@@ -76,7 +83,16 @@ Fifteen tests, no microphone or API key needed. They cover the things that broke
 during setup: exit phrases with punctuation inside them, noise transcriptions,
 emotion tags, tool failures, and history trimming keeping tool calls paired.
 
+## What it knows
+
+It answers from its own knowledge, and searches the web when the answer could have
+changed - who holds an office now, today's news, a current price. It reads the
+results and tells you, rather than opening a tab. Ask it to open the search itself
+and it will do that instead.
+
 ## Try saying
+- "Who is the prime minister of India?"
+- "Explain quantum entanglement simply"
 - "Open notepad"
 - "What time is it?"
 - "How's my battery?"

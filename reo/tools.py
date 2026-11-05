@@ -38,8 +38,21 @@ def open_website(url: str) -> str:
 
 
 def search_web(query: str) -> str:
+    """Look something up and hand the text back, so reo can answer out loud."""
+    try:
+        from ddgs import DDGS
+        results = DDGS().text(query, max_results=4)
+    except Exception as e:
+        return f"Could not search: {e}"
+    if not results:
+        return f"No results for {query}."
+    return "\n".join(f"{r['title']}: {r['body']}" for r in results)
+
+
+def open_search(query: str) -> str:
+    """Put the results on screen when the user wants to look themselves."""
     webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(query))
-    return f"Searched for {query}."
+    return f"Opened a search for {query}."
 
 
 def get_datetime() -> str:
@@ -57,6 +70,7 @@ FUNCTIONS = {
     "open_app": open_app,
     "open_website": open_website,
     "search_web": search_web,
+    "open_search": open_search,
     "get_datetime": get_datetime,
     "get_battery": get_battery,
 }
@@ -82,7 +96,18 @@ TOOLS = [
     },
     {
         "name": "search_web",
-        "description": "Search Google in the browser.",
+        "description": ("Look up current information on the web and read the results. "
+                        "Use this for anything you are unsure of or that may have changed: "
+                        "news, prices, scores, dates, who holds an office now."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "open_search",
+        "description": "Open a web search in the browser for the user to read themselves.",
         "input_schema": {
             "type": "object",
             "properties": {"query": {"type": "string"}},
