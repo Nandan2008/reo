@@ -49,6 +49,26 @@ def search_web(query: str) -> str:
     return "\n".join(f"{r['title']}: {r['body']}" for r in results)
 
 
+PAGE_LIMIT = 3000   # a voice answer needs the gist, not the whole page
+
+
+def read_page(url: str) -> str:
+    """Fetch a page and return its text, for when a search snippet is not enough."""
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    try:
+        import primp
+        response = primp.Client(timeout=15).get(url)
+        if response.status_code >= 400:
+            return f"{url} returned HTTP {response.status_code}."
+        text = " ".join((response.text_plain or "").split())
+    except Exception as e:
+        return f"Could not read {url}: {e}"
+    if not text:
+        return f"{url} had no readable text."
+    return text[:PAGE_LIMIT] + (" ...(truncated)" if len(text) > PAGE_LIMIT else "")
+
+
 def open_search(query: str) -> str:
     """Put the results on screen when the user wants to look themselves."""
     webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(query))
@@ -71,6 +91,7 @@ FUNCTIONS = {
     "open_website": open_website,
     "search_web": search_web,
     "open_search": open_search,
+    "read_page": read_page,
     "get_datetime": get_datetime,
     "get_battery": get_battery,
 }
@@ -87,7 +108,9 @@ TOOLS = [
     },
     {
         "name": "open_website",
-        "description": "Open a website in the default browser.",
+        "description": ("Show a website to the user in their browser. This puts a window on "
+                        "their screen, so only use it when they asked to see something. "
+                        "To read a page yourself, use read_page instead."),
         "input_schema": {
             "type": "object",
             "properties": {"url": {"type": "string", "description": "e.g. youtube.com"}},
@@ -103,6 +126,17 @@ TOOLS = [
             "type": "object",
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
+        },
+    },
+    {
+        "name": "read_page",
+        "description": ("Read the text of a web page. Use it after search_web when the "
+                        "snippets do not contain the answer, such as a live price or a "
+                        "detail buried in an article."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "Full URL to read"}},
+            "required": ["url"],
         },
     },
     {

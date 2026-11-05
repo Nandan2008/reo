@@ -83,12 +83,25 @@ Fifteen tests, no microphone or API key needed. They cover the things that broke
 during setup: exit phrases with punctuation inside them, noise transcriptions,
 emotion tags, tool failures, and history trimming keeping tool calls paired.
 
+## The window
+
+reo opens a window showing a reactor that turns faster and changes colour as it
+listens, thinks and speaks, with the conversation underneath. `REO_UI=0` in `.env`
+runs it in the console alone.
+
 ## What it knows
 
 It answers from its own knowledge, and searches the web when the answer could have
-changed - who holds an office now, today's news, a current price. It reads the
-results and tells you, rather than opening a tab. Ask it to open the search itself
-and it will do that instead.
+changed - who holds an office now, today's news, a current price. When the search
+snippets do not hold the answer it opens one of the results and reads it, so it can
+tell you a live figure rather than handing you a browser tab.
+
+It is told today's date, and told never to put a remembered year into a search. That
+one rule matters: asked for the most recent World Cup it used to search for the year
+it half-remembered, so the web only ever confirmed what it already believed.
+
+What it still cannot do: remember anything after you close it, or see your files,
+screen or email.
 
 ## Try saying
 - "Who is the prime minister of India?"

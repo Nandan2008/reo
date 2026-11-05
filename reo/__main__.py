@@ -33,20 +33,24 @@ def _tee_to_logfile():
     sys.stdout = Tee()
 
 
-def handle(brain, text: str) -> bool:
+def handle(brain, text: str, ui=None) -> bool:
     """Answer one command. Returns False when it is time to stop."""
     print(f"You: {text}")
+    if ui:
+        ui.line("you", text)
 
     if normalize(text) in EXIT_PHRASES:
-        speak("Goodbye.")
+        speak("Goodbye.", ui)
         return False
 
+    if ui:
+        ui.set_state("thinking")
     try:
         reply = brain.think(text)
     except Exception as e:
         print(f"  [error] {e}")
         reply = "Something went wrong reaching my brain. Please try again."
-    speak(reply or "Done.")
+    speak(reply or "Done.", ui)
     return True
 
 
@@ -72,14 +76,32 @@ def main():
             f"\n[{combination}] {'listening' if on else 'stopped listening'}"))
         toggle.start()
 
-    speak("Reo online.")
+    ui = None
+    if config.UI:
+        from .ui import Display
+        hint = {"hotkey": f"{combination} to listen",
+                "wake": f'say "{config.WAKE_NAME}"',
+                "push": "press Enter in the console"}.get(config.MODE, "")
+        ui = Display(subtitle=hint)
+        ui.run(lambda: _loop(listener, brain, waker, toggle, combination, ui))
+        return
 
-    while True:
+    _loop(listener, brain, waker, toggle, combination, None)
+
+
+def _loop(listener, brain, waker, toggle, combination, ui):
+    speak("Reo online.", ui)
+
+    while not (ui and ui.closed):
         try:
+            if ui:
+                ui.set_state("idle")
             if toggle:
                 if not toggle.listening:
                     print(f"\n[Press {combination} to start listening]")
                     toggle.wait_until_listening()
+                if ui:
+                    ui.set_state("listening")
                 text = listener.listen()
                 if not toggle.listening:
                     continue          # switched off while it was recording
@@ -88,20 +110,26 @@ def main():
                 text = waker.wait()
                 if not is_speech(text):
                     # addressed by name with nothing after it
-                    speak("[happy] Yes?")
+                    speak("[happy] Yes?", ui)
+                    if ui:
+                        ui.set_state("listening")
                     text = listener.listen()
             else:
                 input("\n[Press Enter, then speak]  ")
                 print("Listening...")
+                if ui:
+                    ui.set_state("listening")
                 text = listener.listen()
         except (KeyboardInterrupt, EOFError):
             break
 
         if not is_speech(text):
             print("(didn't catch that)")
+            if ui:
+                ui.line("note", "(didn't catch that)")
             continue
 
-        if not handle(brain, text):
+        if not handle(brain, text, ui):
             break
 
 

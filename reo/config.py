@@ -32,6 +32,8 @@ MAX_HISTORY_MESSAGES = 20
 #   "wake"   - always listening, answers to its name
 #   "push"   - press Enter in its window first
 MODE = os.getenv("REO_MODE", "hotkey")
+# Show the window. Set REO_UI=0 for console only.
+UI = os.getenv("REO_UI", "1") not in ("0", "false", "no")
 # pynput spelling: <ctrl> <alt> <shift> <cmd> plus a letter.
 HOTKEY = os.getenv("REO_HOTKEY", "<ctrl>+<alt>+r")
 # A small model is plenty for spotting one word, and keeps the idle cost down.

@@ -89,11 +89,14 @@ def _speak_orpheus(text: str) -> None:
         sd.wait()
 
 
-def speak(text: str) -> None:
+def speak(text: str, ui=None) -> None:
     global _orpheus_failed
 
     emotion, text = split_emotion(text)
     print(f"Reo ({emotion}): {text}" if emotion != "neutral" else f"Reo: {text}")
+    if ui:
+        ui.line("reo", text)
+        ui.set_state("speaking")
 
     if config.TTS_BACKEND == "orpheus" and not _orpheus_failed:
         try:

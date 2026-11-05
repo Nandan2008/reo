@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from openai import BadRequestError, OpenAI
 
@@ -23,6 +24,9 @@ SYSTEM = (
     "Only call a tool when the user asks for an action or for information a tool provides. "
     "Answer from your own knowledge when you are confident. Search the web when the answer "
     "could have changed or you are unsure, and never guess at a fact you could look up. "
+    "Never put a year or date you remember into a search query: ask what is most recent "
+    "instead, or the search only confirms what you already believed. "
+    "If the snippets do not hold the answer, read_page one of the results before replying. "
     "If something isn't possible with your tools, say so briefly."
 )
 
@@ -43,9 +47,10 @@ class Brain:
         """One API call. gpt-oss sometimes reaches for a built-in tool we do not
         expose (notably 'refuse' when declining), which the server rejects with a
         400. Answering without tools lets it say its piece instead of crashing."""
+        today = datetime.now().strftime("%A, %d %B %Y")
         kwargs = dict(
             model=config.LLM_MODEL,
-            messages=[{"role": "system", "content": SYSTEM}] + self.history,
+            messages=[{"role": "system", "content": f"{SYSTEM} Today is {today}."}] + self.history,
             max_tokens=500,
             temperature=0.3,
         )
