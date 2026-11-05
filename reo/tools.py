@@ -86,12 +86,18 @@ def get_battery() -> str:
     return f"{b.percent:.0f}% ({'charging' if b.power_plugged else 'on battery'})"
 
 
+def run_command(command: str, confirmed: bool = False) -> str:
+    from .shell import run_command as _run
+    return _run(command, confirmed)
+
+
 FUNCTIONS = {
     "open_app": open_app,
     "open_website": open_website,
     "search_web": search_web,
     "open_search": open_search,
     "read_page": read_page,
+    "run_command": run_command,
     "get_datetime": get_datetime,
     "get_battery": get_battery,
 }
@@ -126,6 +132,23 @@ TOOLS = [
             "type": "object",
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
+        },
+    },
+    {
+        "name": "run_command",
+        "description": ("Run a PowerShell command on this Windows machine. Use it for "
+                        "anything the other tools do not cover: files, folders, settings, "
+                        "programs, system information. Prefer a specific tool when one "
+                        "fits. Some commands are refused outright and some must be "
+                        "confirmed by the user first; the result will tell you which."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The PowerShell command"},
+                "confirmed": {"type": "boolean",
+                              "description": "True only after the user said yes out loud"},
+            },
+            "required": ["command"],
         },
     },
     {

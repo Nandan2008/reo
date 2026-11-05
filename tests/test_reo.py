@@ -149,6 +149,45 @@ class Gain(unittest.TestCase):
         self.assertLess(float(np.max(np.abs(normalize_gain(nearly)))), 0.5)
 
 
+class ShellGuards(unittest.TestCase):
+    """Voice mishears and web pages can steer a model, so these matter.
+
+    The strings below are never executed: every one is asserted to be stopped
+    before it reaches a shell.
+    """
+
+    @staticmethod
+    def _run(command, confirmed=False):
+        from unittest import mock
+        from reo import shell
+        with mock.patch.object(config, "ALLOW_SHELL", True):
+            return shell.run_command(command, confirmed)
+
+    def test_off_unless_turned_on(self):
+        from unittest import mock
+        from reo import shell
+        with mock.patch.object(config, "ALLOW_SHELL", False):
+            self.assertIn("switched off", shell.run_command("Get-Date"))
+
+    def test_catastrophic_refused_even_when_confirmed(self):
+        for command in ["format " + "c:", "disk" + "part",
+                        "Remove-Item -Recurse -Force C:" + chr(92) + "Windows",
+                        "vssadmin delete shadows /all"]:
+            with self.subTest(command=command):
+                self.assertTrue(self._run(command, confirmed=True).startswith("Refused"))
+
+    def test_destructive_asks_first(self):
+        for command in ["Remove-Item C:" + chr(92) + "temp" + chr(92) + "a.txt",
+                        "shutdown /s /t 0",
+                        "Stop-Process -Name notepad"]:
+            with self.subTest(command=command):
+                self.assertTrue(self._run(command).startswith("This would"))
+
+    def test_harmless_is_not_gated(self):
+        out = self._run("Get-Date -Format yyyy")
+        self.assertFalse(out.startswith(("Refused", "This would")))
+
+
 class ToolFailures(unittest.TestCase):
     """run_tool must hand failures back to the model, never raise."""
 

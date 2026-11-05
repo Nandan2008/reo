@@ -34,6 +34,9 @@ MAX_HISTORY_MESSAGES = 20
 MODE = os.getenv("REO_MODE", "hotkey")
 # Show the window. Set REO_UI=0 for console only.
 UI = os.getenv("REO_UI", "1") not in ("0", "false", "no")
+# Let reo run commands on the machine. Off unless you turn it on: it is driven
+# by speech that mishears, and by web pages that can be written to steer it.
+ALLOW_SHELL = os.getenv("REO_ALLOW_SHELL", "0") not in ("0", "false", "no")
 # pynput spelling: <ctrl> <alt> <shift> <cmd> plus a letter.
 HOTKEY = os.getenv("REO_HOTKEY", "<ctrl>+<alt>+r")
 # Wake detection: "phrase" uses a model trained on the wake word itself and is

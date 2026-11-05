@@ -112,6 +112,24 @@ reo opens a window showing a reactor that turns faster and changes colour as it
 listens, thinks and speaks, with the conversation underneath. `REO_UI=0` in `.env`
 runs it in the console alone.
 
+## Running things on the machine
+
+Set `REO_ALLOW_SHELL=1` in `.env` and reo can run PowerShell: files, folders,
+settings, programs, system information - whatever the dedicated tools do not cover.
+
+It is off by default, and that is deliberate. reo is driven by speech transcription
+that has, on this machine, produced whole sentences out of room noise; and it reads
+web pages, where text can be written to steer a model. Either can put a command in
+front of it that nobody asked for. So there are three tiers:
+
+| | what happens |
+| --- | --- |
+| Catastrophic | Always refused. Formatting a drive, repartitioning, deleting a system or user root, editing the boot config, deleting shadow copies. Being confirmed does not help. |
+| Destructive | reo says what it is about to do and waits for you to say yes. Deleting or moving files, killing processes, shutting down, uninstalling, registry edits, downloads. |
+| Everything else | Runs. |
+
+Every command is written to `reo.log`.
+
 ## What it knows
 
 It answers from its own knowledge, and searches the web when the answer could have
