@@ -36,12 +36,23 @@ class WakeListener:
         print(f"Loading wake model ({config.WAKE_MODEL})...")
         self.model = WhisperModel(config.WAKE_MODEL, device="cpu", compute_type="int8")
 
-    def _transcribe(self, frames) -> str:
-        clip = au.normalize(np.concatenate(frames).flatten())
+    def _transcribe(self, frames):
+        """Returns (text, note). note explains an empty text."""
+        raw = np.concatenate(frames).flatten()
+        peak = float(np.max(np.abs(raw)))
+        clip = au.normalize(raw)
+        secs = len(raw) / config.SAMPLE_RATE
+
         segments, _ = self.model.transcribe(clip, language=config.LANGUAGE, beam_size=1,
                                             vad_filter=True, **au.CAREFUL)
         text = " ".join(s.text for s in segments).strip()
-        return "" if au.looks_hallucinated(text) else text
+
+        if not text:
+            # strict thresholds, the VAD, or genuinely no speech
+            return "", f"{secs:.1f}s at peak {peak:.3f} produced no words"
+        if au.looks_hallucinated(text):
+            return "", f'ignored a repeat: "{text[:45]}"'
+        return text, ""
 
     @staticmethod
     def _is_name(word: str) -> bool:
@@ -90,12 +101,13 @@ class WakeListener:
                     silent += 1
 
                 if silent >= silence_blocks or len(frames) >= max_blocks:
-                    heard = self._transcribe(frames)
-                    command = WakeListener._command_after_wake(heard)
-                    if command is not None:
-                        return command
-                    # show what was discarded, or a silent mic looks identical to
-                    # one that simply never hears its name
-                    print(f'  (heard "{heard}")' if heard else "  (heard nothing usable)")
+                    heard, note = self._transcribe(frames)
+                    if heard:
+                        command = WakeListener._command_after_wake(heard)
+                        if command is not None:
+                            return command
+                    # say exactly why nothing happened, or a deaf mic and an
+                    # unrecognised name look identical from the outside
+                    print(f'  (heard "{heard}")' if heard else f"  ({note})")
                     lead_in.clear()
                     frames, speaking, silent = [], False, 0

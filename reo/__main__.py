@@ -1,4 +1,6 @@
 import sys
+from datetime import datetime
+from pathlib import Path
 
 from . import config
 from .brain import Brain
@@ -7,6 +9,28 @@ from .speak import speak
 from .text import is_speech, normalize
 
 EXIT_PHRASES = {"goodbye", "bye", "exit", "quit", "stop listening", "goodbye reo", "bye reo"}
+
+
+def _tee_to_logfile():
+    """Started from the Startup folder there is no console to read, so keep a log."""
+    path = Path(__file__).resolve().parent.parent / "reo.log"
+    try:
+        log = open(path, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return
+    log.write(f"\n===== started {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+
+    class Tee:
+        def write(self, text):
+            sys.__stdout__.write(text)
+            log.write(text)
+            return len(text)
+
+        def flush(self):
+            sys.__stdout__.flush()
+            log.flush()
+
+    sys.stdout = Tee()
 
 
 def handle(brain, text: str) -> bool:
@@ -29,6 +53,7 @@ def handle(brain, text: str) -> bool:
 def main():
     # Windows consoles are cp1252; replies often hold characters it cannot encode
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    _tee_to_logfile()
 
     if not config.LLM_API_KEY or config.LLM_API_KEY == "your-groq-key-here":
         print("Missing LLM_API_KEY. Copy .env.example to .env and add your free Groq key.")

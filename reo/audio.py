@@ -5,13 +5,11 @@ TARGET_PEAK = 0.5
 MAX_GAIN = 12.0      # beyond this we are only amplifying room noise
 SILENT = 1e-4
 
-# Whisper invents text when there is little real speech, and it gives itself away
-# by repeating. These are stricter than the defaults, which assume clean audio.
+# Tightening Whisper's own thresholds below their defaults threw away genuine
+# speech along with the hallucinations. looks_hallucinated() and having to hear
+# the name filter the noise well enough on their own.
 CAREFUL = dict(
     condition_on_previous_text=False,   # stops one hallucination seeding the next
-    compression_ratio_threshold=2.0,    # repeated phrases compress well; drop them
-    log_prob_threshold=-0.8,            # drop segments the model is unsure of
-    no_speech_threshold=0.5,
 )
 
 
