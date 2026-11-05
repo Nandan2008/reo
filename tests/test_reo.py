@@ -222,8 +222,21 @@ class ShellGuards(unittest.TestCase):
 class ToolFailures(unittest.TestCase):
     """run_tool must hand failures back to the model, never raise."""
 
-    def test_unknown_app_is_refused(self):
-        self.assertIn("Not allowed", tools.run_tool("open_app", {"name": "spotify"}))
+    def test_unknown_app_says_so(self):
+        """Decided from a stubbed PowerShell: a test must not launch programs.
+        The version of this test that called through really did open Spotify."""
+        from unittest import mock
+        from reo import apps
+        with mock.patch.object(apps, "_powershell", return_value="NOTFOUND"):
+            self.assertIn("Nothing installed matches", apps.open_app("nosuchapp"))
+
+    def test_several_apps_match_opens_nothing(self):
+        from unittest import mock
+        from reo import apps
+        with mock.patch.object(apps, "_powershell", return_value="MANY:Word|WordPad"):
+            out = apps.open_app("word")
+        self.assertIn("nothing was opened", out)
+        self.assertIn("WordPad", out)
 
     def test_unknown_tool(self):
         self.assertIn("Unknown tool", tools.run_tool("fly_to_moon", {}))
