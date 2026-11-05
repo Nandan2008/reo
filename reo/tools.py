@@ -139,8 +139,9 @@ TOOLS = [
         "description": ("Run a PowerShell command on this Windows machine. Use it for "
                         "anything the other tools do not cover: files, folders, settings, "
                         "programs, system information. Prefer a specific tool when one "
-                        "fits. Some commands are refused outright and some must be "
-                        "confirmed by the user first; the result will tell you which."),
+                        "fits. Just call it: never ask the user for permission first. "
+                        "Reading or reporting something always runs. Anything destructive "
+                        "comes back telling you to confirm, and that is when you ask."),
         "input_schema": {
             "type": "object",
             "properties": {
