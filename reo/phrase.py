@@ -8,6 +8,10 @@ openWakeWord scores 80ms frames against a model trained on one phrase. It is far
 cheaper to run continuously and far harder to fool: on synthesised speech here it
 scored 0.998 for "Hey Jarvis" and 0.000 for unrelated sentences.
 """
+import os
+import re
+from pathlib import Path
+
 import numpy as np
 import sounddevice as sd
 
@@ -23,9 +27,11 @@ class PhraseListener:
     def __init__(self, listener):
         from openwakeword.model import Model
 
-        self.key = config.WAKE_PHRASE
-        print(f'Loading wake word ("{self.key}")...')
-        self.model = Model(inference_framework="onnx", wakeword_models=[self.key])
+        print(f'Loading wake word ("{pretty(config.WAKE_PHRASE)}")...')
+        self.model = Model(inference_framework="onnx", wakeword_models=[config.WAKE_PHRASE])
+        # A pretrained name keys on itself, a custom file keys on its filename,
+        # so take whatever the model actually registered.
+        self.key = next(iter(self.model.models))
         self.listener = listener
 
     def wait(self) -> str:
@@ -43,6 +49,12 @@ class PhraseListener:
         # They are most likely still mid-sentence, so record immediately rather
         # than answering "Yes?" over the top of them.
         return self.listener.listen()
+
+
+def pretty(spec: str) -> str:
+    """Turn "hey_jarvis", or a path to a trained model, into something sayable."""
+    stem = Path(spec).stem if spec.endswith(".onnx") or os.sep in spec else spec
+    return re.sub(r"[_-]v?[\d.]+$", "", stem).replace("_", " ").strip()
 
 
 def available(name: str) -> bool:

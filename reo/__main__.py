@@ -36,7 +36,8 @@ def _tee_to_logfile():
 def woken_by() -> str:
     """What to tell the user to say, which depends on the wake engine."""
     if config.WAKE_ENGINE == "phrase":
-        return config.WAKE_PHRASE.replace("_", " ")
+        from .phrase import pretty
+        return pretty(config.WAKE_PHRASE)
     return config.WAKE_NAME
 
 

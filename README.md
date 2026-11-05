@@ -39,10 +39,26 @@ phrase. It only has to recognise a sound, not transcribe the room, so it works w
 the older approach did not: on synthesised speech it scores 0.998 for the phrase and
 0.000 for unrelated sentences.
 
-The pretrained phrases are `hey_jarvis`, `alexa`, `hey_mycroft` and `hey_rhasspy`;
-pick one with `REO_WAKE_PHRASE`. For a custom name, `REO_WAKE_ENGINE=whisper` goes
-back to transcribing and matching `REO_WAKE_WORDS` - which allows any name, but needs
-a cleaner microphone than a laptop array usually gives.
+### Being woken by its own name
+
+reo is called reo whatever wakes it - the name lives in the brain, not the wake word.
+But openWakeWord only ships models for `hey_jarvis`, `alexa`, `hey_mycroft` and
+`hey_rhasspy`, and none of them is "reo". Three ways round that:
+
+| | how | works today |
+| --- | --- | --- |
+| Hotkey | Ctrl+Alt+R. No wake word at all. | yes, reliably |
+| A pretrained phrase | `REO_WAKE_PHRASE=hey_jarvis` | yes, but it is not its name |
+| A model trained on "reo" | `REO_WAKE_PHRASE=C:\patheo.onnx` | once you train one |
+
+The third is the real answer. openWakeWord's training notebook generates synthetic
+examples of a phrase and trains a model on a free Colab GPU; it hands back a `.onnx`
+you point `REO_WAKE_PHRASE` at, and reo loads it like any other. Training locally
+instead needs PyTorch, which is a ~2GB download.
+
+`REO_WAKE_ENGINE=whisper` is the fallback that allows any name with no training, by
+transcribing and matching `REO_WAKE_WORDS`. It needs a cleaner microphone than a
+laptop array usually gives.
 
 The microphone is only open while it is listening, nothing is transcribed until you
 stop speaking, and the transcription happens on this machine. Only a command you
