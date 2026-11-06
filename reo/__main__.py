@@ -1,4 +1,5 @@
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -41,7 +42,7 @@ def woken_by() -> str:
     return config.WAKE_NAME
 
 
-def handle(brain, text: str, ui=None) -> bool:
+def handle(brain, text: str, ui=None, heard_in: float = 0.0) -> bool:
     """Answer one command. Returns False when it is time to stop."""
     print(f"You: {text}")
     if ui:
@@ -53,12 +54,24 @@ def handle(brain, text: str, ui=None) -> bool:
 
     if ui:
         ui.set_state("thinking")
+
+    started = time.time()
     try:
         reply = brain.think(text)
     except Exception as e:
         print(f"  [error] {e}")
         reply = "Something went wrong reaching my brain. Please try again."
+    thought = time.time() - started
+
+    started = time.time()
     speak(reply or "Done.", ui)
+    spoke = time.time() - started
+
+    # Where a reply's time actually went, so slowness can be read off the log
+    # instead of guessed at.
+    calls = sum(1 for m in brain.history if m.get("role") == "tool")
+    print(f"  [time] heard {heard_in:.1f}s  thought {thought:.1f}s ({calls} tools)  "
+          f"spoke {spoke:.1f}s  total {heard_in + thought + spoke:.1f}s")
     return True
 
 
@@ -105,6 +118,7 @@ def _loop(listener, brain, waker, toggle, combination, ui):
     speak("Reo online.", ui)
 
     while not (ui and ui.closed):
+        heard_in = 0.0
         try:
             if ui:
                 ui.set_state("idle")
@@ -114,7 +128,9 @@ def _loop(listener, brain, waker, toggle, combination, ui):
                     toggle.wait_until_listening()
                 if ui:
                     ui.set_state("listening")
+                started = time.time()
                 text = listener.listen()
+                heard_in = time.time() - started
                 if not toggle.listening:
                     continue          # switched off while it was recording
             elif waker:
@@ -141,7 +157,7 @@ def _loop(listener, brain, waker, toggle, combination, ui):
                 ui.line("note", "(didn't catch that)")
             continue
 
-        if not handle(brain, text, ui):
+        if not handle(brain, text, ui, heard_in):
             break
 
 

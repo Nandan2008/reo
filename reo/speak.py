@@ -26,7 +26,12 @@ TAG = re.compile(r"^\s*\[(\w+)]\s*")
 _orpheus_failed = False  # fall back quietly after the first failure
 
 
-ANY_TAG = re.compile(r"\[(\w+)]")
+# Whatever bracketed tokens the reply opens with. Not just [word]: the model has
+# emitted "[emotion?]" and "[...]", and reo read them out loud.
+LEADING_TAGS = re.compile(r"^(?:\s*\[[^\[\]\s]{0,15}])+\s*")
+# A named emotion anywhere, since the model sometimes repeats it mid-reply.
+# Brackets elsewhere are left alone, or a range like [1-10] gets eaten.
+NAMED_TAG = re.compile(r"\[(\w+)]")
 
 
 def _undouble(text: str) -> str:
@@ -43,9 +48,14 @@ def split_emotion(text: str) -> tuple[str, str]:
     The tag belongs at the front, but the model sometimes repeats it mid-reply,
     so every one is removed rather than just the first.
     """
-    tags = ANY_TAG.findall(text)
-    emotion = next((t.lower() for t in tags if t.lower() in VOICE_SETTINGS), "neutral")
-    spoken = _undouble(ANY_TAG.sub("", text).strip())
+    named = [t.lower() for t in NAMED_TAG.findall(text)]
+    emotion = next((t for t in named if t in VOICE_SETTINGS), "neutral")
+
+    spoken = LEADING_TAGS.sub("", text)
+    # and any repeat of a real emotion name later in the reply
+    spoken = NAMED_TAG.sub(
+        lambda m: "" if m.group(1).lower() in VOICE_SETTINGS else m.group(0), spoken)
+    spoken = _undouble(spoken.strip())
     return emotion, spoken
 
 

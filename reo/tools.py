@@ -103,9 +103,14 @@ def get_battery() -> str:
     return f"{b.percent:.0f}% ({'charging' if b.power_plugged else 'on battery'})"
 
 
-def type_text(text: str, window: str = None) -> str:
+def type_text(text: str, window: str = None, enter: bool = False) -> str:
     from .keys import type_text as _type
-    return _type(text, window)
+    return _type(text, window, enter)
+
+
+def press_key(key: str, window: str = None) -> str:
+    from .keys import press_key as _press
+    return _press(key, window)
 
 
 def list_windows() -> str:
@@ -127,6 +132,7 @@ FUNCTIONS = {
     "read_page": read_page,
     "run_command": run_command,
     "type_text": type_text,
+    "press_key": press_key,
     "list_windows": list_windows,
     "get_datetime": get_datetime,
     "get_battery": get_battery,
@@ -183,8 +189,27 @@ TOOLS = [
                 "text": {"type": "string", "description": "What to type"},
                 "window": {"type": "string",
                            "description": "Part of the target window's title"},
+                "enter": {"type": "boolean",
+                          "description": ("True to press enter after typing, which "
+                                          "sends the message in a chat or search box. "
+                                          "Use it when the user says send, or enter it.")},
             },
             "required": ["text"],
+        },
+    },
+    {
+        "name": "press_key",
+        "description": ("Press a key in another window: enter, tab, escape, up, down, "
+                        "delete, a function key, or a combination like ctrl+a. Use this "
+                        "to send or submit something already typed."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "e.g. 'enter', 'ctrl+a'"},
+                "window": {"type": "string",
+                           "description": "Part of the target window's title"},
+            },
+            "required": ["key"],
         },
     },
     {

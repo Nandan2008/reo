@@ -39,7 +39,7 @@ RINGS = (
 TRANSCRIPT = 14          # lines kept on screen
 FRAME_MS = 40            # 25fps is plenty for a turning ring
 SPIN = "spin"            # the only items redrawn every frame
-CLOCK = "clock"          # redrawn once a second
+LIVE = "live"            # clock and system readout, redrawn once a second
 
 
 class Display:
@@ -109,26 +109,46 @@ class Display:
 
     # ---- the layer that only changes on an event ---------------------------
 
+    def _frame(self, w, h, colour) -> None:
+        """Angled corners and edge rails, the furniture of a heads-up display."""
+        c = self.canvas
+        arm, inset, cut = 56, 20, 14
+        for cx, cy, dx, dy in ((inset, inset, 1, 1), (w - inset, inset, -1, 1),
+                               (inset, h - inset, 1, -1), (w - inset, h - inset, -1, -1)):
+            c.create_line(cx + cut * dx, cy, cx + arm * dx, cy, fill=colour)
+            c.create_line(cx, cy + cut * dy, cx, cy + arm * dy, fill=colour)
+            c.create_line(cx + cut * dx, cy, cx, cy + cut * dy, fill=colour)  # the mitre
+
+        # rails down both sides, ticking every 40px
+        for y in range(140, h - 120, 40):
+            long = (y // 40) % 4 == 0
+            c.create_line(inset, y, inset + (12 if long else 6), y,
+                          fill=EDGE if not long else GRID)
+            c.create_line(w - inset, y, w - inset - (12 if long else 6), y,
+                          fill=EDGE if not long else GRID)
+
     def _draw_fixed(self, w, h, colour) -> None:
         c = self.canvas
         c.delete("all")
 
-        arm, inset = 34, 22
-        for cx, cy, dx, dy in ((inset, inset, 1, 1), (w - inset, inset, -1, 1),
-                               (inset, h - inset, 1, -1), (w - inset, h - inset, -1, -1)):
-            c.create_line(cx, cy, cx + arm * dx, cy, fill=EDGE)
-            c.create_line(cx, cy, cx, cy + arm * dy, fill=EDGE)
+        self._frame(w, h, EDGE)
 
         c.create_text(46, 40, text="R  E  O", anchor="w", fill=TEXT,
+                      font=("Consolas", 22, "bold"))
+        c.create_text(141, 40, text="//", anchor="w", fill=colour,
                       font=("Consolas", 22, "bold"))
         if self._subtitle:
             c.create_text(46, 68, text=self._subtitle.upper(), anchor="w", fill=MUTED,
                           font=("Consolas", 9))
         c.create_line(46, 88, w - 46, 88, fill=EDGE)
+        c.create_line(46, 88, 200, 88, fill=colour, width=2)
 
         panel, size = self._reactor_box(w, h)
-        c.create_text(46 + panel / 2, h / 2 + size * 1.5, text=self._state.upper(),
+        mid = 46 + panel / 2
+        c.create_text(mid, h / 2 + size * 1.5, text=self._state.upper(),
                       fill=colour, font=("Consolas", 14, "bold"))
+        c.create_line(mid - 60, h / 2 + size * 1.5 + 16, mid + 60, h / 2 + size * 1.5 + 16,
+                      fill=EDGE)
 
         self._transcript(46 + panel, 120, w - panel - 92, colour)
 
@@ -153,6 +173,39 @@ class Display:
             row += 20 + 14 * (len(text) // 70)
 
     # ---- the layer that moves ----------------------------------------------
+
+    def _readout(self, w, h, colour) -> None:
+        """Live system figures under the reactor. Once a second, not every frame."""
+        c = self.canvas
+        panel, size = self._reactor_box(w, h)
+        x = 46
+        y = h / 2 + size * 1.5 + 44
+
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            rows = [
+                ("CPU", f"{psutil.cpu_percent():.0f}%"),
+                ("MEM", f"{psutil.virtual_memory().percent:.0f}%"),
+                ("PWR", f"{battery.percent:.0f}%" if battery else "AC"),
+            ]
+        except Exception:
+            rows = [("CPU", "--"), ("MEM", "--"), ("PWR", "--")]
+
+        width = panel - 40
+        for i, (label, value) in enumerate(rows):
+            row = y + i * 22
+            c.create_text(x, row, text=label, anchor="w", fill=MUTED,
+                          font=("Consolas", 9), tags=LIVE)
+            c.create_text(x + width, row, text=value, anchor="e", fill=colour,
+                          font=("Consolas", 10, "bold"), tags=LIVE)
+            # a thin bar for the ones that are percentages
+            if value.endswith("%"):
+                filled = int(value[:-1]) / 100
+                bar_x, bar_w = x + 44, width - 90
+                c.create_line(bar_x, row, bar_x + bar_w, row, fill=GRID, tags=LIVE)
+                c.create_line(bar_x, row, bar_x + bar_w * filled, row,
+                              fill=colour, width=2, tags=LIVE)
 
     @staticmethod
     def _reactor_box(w, h):
@@ -203,11 +256,12 @@ class Display:
         now = datetime.now()
         if now.second != self._second:
             self._second = now.second
-            c.delete(CLOCK)
+            c.delete(LIVE)
             c.create_text(w - 46, 40, text=now.strftime("%H:%M:%S"), anchor="e",
-                          fill=MUTED, font=("Consolas", 16), tags=CLOCK)
+                          fill=TEXT, font=("Consolas", 18), tags=LIVE)
             c.create_text(w - 46, 64, text=now.strftime("%a %d %b %Y").upper(),
-                          anchor="e", fill=MUTED, font=("Consolas", 9), tags=CLOCK)
+                          anchor="e", fill=MUTED, font=("Consolas", 9), tags=LIVE)
+            self._readout(w, h, colour)
 
         c.delete(SPIN)
         panel, size = self._reactor_box(w, h)

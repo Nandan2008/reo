@@ -162,8 +162,31 @@ class Typing(unittest.TestCase):
 
     def test_several_matches_types_nothing(self):
         out = self._type("MANY:Notes - Notepad|config - Notepad")
-        self.assertIn("nothing was typed", out)
+        self.assertIn("nothing was sent", out)
         self.assertIn("Notes - Notepad", out)
+
+    def test_enter_is_appended_when_asked(self):
+        """Typing without sending was the complaint: it typed, nothing submitted."""
+        from unittest import mock
+        from reo import keys
+        with mock.patch.object(keys, "_powershell", return_value="TYPED:Chrome") as ps:
+            keys.type_text("hello", "chrome", enter=True)
+        self.assertTrue(ps.call_args[0][1]["REO_TEXT"].endswith("{ENTER}"))
+
+        with mock.patch.object(keys, "_powershell", return_value="TYPED:Chrome") as ps:
+            keys.type_text("hello", "chrome")
+        self.assertFalse(ps.call_args[0][1]["REO_TEXT"].endswith("{ENTER}"))
+
+    def test_keystrokes_understood(self):
+        from reo.keys import keystroke
+        self.assertEqual(keystroke("enter"), "{ENTER}")
+        self.assertEqual(keystroke("send"), "{ENTER}")
+        self.assertEqual(keystroke("ctrl+a"), "^a")
+        self.assertEqual(keystroke("alt+f4"), "%{F4}")
+
+    def test_unknown_key_presses_nothing(self):
+        from reo.keys import press_key
+        self.assertIn("not a key reo knows", press_key("banana", "notepad"))
 
     def test_one_match_is_typed(self):
         self.assertIn("Notes - Notepad", self._type("TYPED:Notes - Notepad"))
