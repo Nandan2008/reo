@@ -39,16 +39,31 @@ def open_website(url: str) -> str:
     return f"Opened {url}."
 
 
+_searcher = None
+_search_cache = {}
+
+
 def search_web(query: str) -> str:
     """Look something up and hand the text back, so reo can answer out loud."""
+    global _searcher
+
+    key = query.strip().lower()
+    if key in _search_cache:      # the model rewords and retries; don't pay twice
+        return _search_cache[key]
+
     try:
-        from ddgs import DDGS
-        results = DDGS().text(query, max_results=4)
+        if _searcher is None:
+            from ddgs import DDGS
+            _searcher = DDGS()    # building one per search cost about 1.3s each time
+        results = _searcher.text(query, max_results=4)
     except Exception as e:
         return f"Could not search: {e}"
+
     if not results:
         return f"No results for {query}."
-    return "\n".join(f"{r['title']}: {r['body']}" for r in results)
+    answer = "\n".join(f"{r['title']}: {r['body']}" for r in results)
+    _search_cache[key] = answer
+    return answer
 
 
 PAGE_LIMIT = 3000   # a voice answer needs the gist, not the whole page
