@@ -43,14 +43,24 @@ def already_running() -> int:
         import psutil
     except ImportError:
         return 0
-    mine = os.getpid()
+    # The venv's python.exe launches a child with the same command line, so the
+    # launcher looks exactly like a second copy. Skip the whole ancestor chain.
+    family = {os.getpid()}
+    try:
+        walker = psutil.Process().parent()
+        while walker is not None and len(family) < 8:
+            family.add(walker.pid)
+            walker = walker.parent()
+    except Exception:
+        pass
+
     for process in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
             info = process.info
             pid, name, cmdline = info["pid"], info["name"] or "", info["cmdline"] or []
         except Exception:
             continue
-        if pid == mine or not name.lower().startswith("python"):
+        if pid in family or not name.lower().startswith("python"):
             continue
         # "-m" immediately followed by "reo", and nothing looser. Matching any
         # part ending in "reo" caught the working directory and refused to start
