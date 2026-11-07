@@ -44,14 +44,19 @@ def already_running() -> int:
     except ImportError:
         return 0
     mine = os.getpid()
-    for process in psutil.process_iter(["pid", "cmdline"]):
+    for process in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
-            pid, cmdline = process.info["pid"], process.info["cmdline"] or []
+            info = process.info
+            pid, name, cmdline = info["pid"], info["name"] or "", info["cmdline"] or []
         except Exception:
             continue
-        if pid != mine and any("reo" == part or part.endswith("reo") for part in cmdline):
-            if any(part == "-m" for part in cmdline):
-                return pid
+        if pid == mine or not name.lower().startswith("python"):
+            continue
+        # "-m" immediately followed by "reo", and nothing looser. Matching any
+        # part ending in "reo" caught the working directory and refused to start
+        # when nothing was running at all.
+        if any(a == "-m" and b == "reo" for a, b in zip(cmdline, cmdline[1:])):
+            return pid
     return 0
 
 

@@ -249,25 +249,42 @@ class SecondCopy(unittest.TestCase):
     def _with_processes(entries):
         from unittest import mock
         import psutil
-        fakes = [mock.Mock(info={"pid": pid, "cmdline": cmd}) for pid, cmd in entries]
+        fakes = [mock.Mock(info={"pid": pid, "name": name, "cmdline": cmd})
+                 for pid, name, cmd in entries]
         return mock.patch.object(psutil, "process_iter", return_value=fakes)
 
     def test_spots_another_reo(self):
         import os
         from reo.__main__ import already_running
-        with self._with_processes([(os.getpid() + 1, ["python.exe", "-m", "reo"])]):
+        with self._with_processes([(os.getpid() + 1, "python.exe", ["python.exe", "-m", "reo"])]):
             self.assertTrue(already_running())
 
     def test_ignores_itself(self):
         import os
         from reo.__main__ import already_running
-        with self._with_processes([(os.getpid(), ["python.exe", "-m", "reo"])]):
+        with self._with_processes([(os.getpid(), "python.exe", ["python.exe", "-m", "reo"])]):
             self.assertFalse(already_running())
 
     def test_ignores_unrelated_python(self):
         import os
         from reo.__main__ import already_running
-        with self._with_processes([(os.getpid() + 1, ["python.exe", "manage.py"])]):
+        with self._with_processes([(os.getpid() + 1, "python.exe", ["python.exe", "manage.py"])]):
+            self.assertFalse(already_running())
+
+    def test_working_directory_is_not_a_running_reo(self):
+        """This false positive refused to start reo when nothing was running."""
+        import os
+        from reo.__main__ import already_running
+        with self._with_processes([(os.getpid() + 1, "python.exe",
+                                    ["python.exe", "-m", "pip", "install",
+                                     r"C:\Users\kollu\OneDrive\Desktop\reo"])]):
+            self.assertFalse(already_running())
+
+    def test_ignores_non_python_processes(self):
+        import os
+        from reo.__main__ import already_running
+        with self._with_processes([(os.getpid() + 1, "powershell.exe",
+                                    ["powershell.exe", "-m", "reo"])]):
             self.assertFalse(already_running())
 
 
