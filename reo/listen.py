@@ -19,12 +19,13 @@ class Listener:
         wait_blocks = int(config.WAIT_FOR_SPEECH_SECONDS / BLOCK_SECONDS)
         silence_blocks = int(config.SILENCE_SECONDS / BLOCK_SECONDS)
 
-        frames, heard, silent = [], False, 0
+        frames, heard, silent, asked_to_stop = [], False, 0, False
         with sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1,
                             dtype="float32", blocksize=block) as stream:
             for i in range(max_blocks):
                 if stop_now is not None and stop_now():
-                    break        # they pressed the key again: take what we have
+                    asked_to_stop = True
+                    break
                 data, _ = stream.read(block)
                 frames.append(data.copy())
                 loud = float(np.sqrt(np.mean(data ** 2))) > config.SILENCE_THRESHOLD
@@ -39,7 +40,15 @@ class Listener:
             else:
                 if heard:
                     print(f"  (stopped at the {config.MAX_RECORD_SECONDS} second limit)")
-        return np.concatenate(frames).flatten() if heard else None
+
+        if not frames:
+            return None
+        # When they pressed the key to stop, transcribe what was captured even if
+        # it never crossed the loudness threshold. A quiet microphone kept "heard"
+        # false, so every deliberate recording was binned as "didn't catch that".
+        if heard or (asked_to_stop and len(frames) * BLOCK_SECONDS >= 0.4):
+            return np.concatenate(frames).flatten()
+        return None
 
     def listen(self, stop_now=None) -> str:
         audio = self._record(stop_now)

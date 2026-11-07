@@ -203,6 +203,38 @@ class Typing(unittest.TestCase):
         self.assertEqual(escape("plain text"), "plain text")
 
 
+class Recording(unittest.TestCase):
+    """A quiet mic made every deliberate recording come back
+    "(didn't catch that)", because the loudness flag never flipped."""
+
+    @staticmethod
+    def _record(level, stop_after):
+        import time
+        from unittest import mock
+        from reo.listen import Listener
+
+        block = np.full((1600, 1), level, dtype=np.float32)
+        started = time.monotonic()
+
+        class FakeStream:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, n):
+                time.sleep(0.01)
+                return block, None
+
+        listener = Listener.__new__(Listener)
+        with mock.patch("reo.listen.sd.InputStream", lambda **kw: FakeStream()):
+            return listener._record(
+                stop_now=lambda: time.monotonic() - started > stop_after)
+
+    def test_quiet_speech_is_kept_when_you_press_stop(self):
+        self.assertIsNotNone(self._record(level=0.002, stop_after=0.6))
+
+    def test_nothing_recorded_is_still_discarded(self):
+        self.assertIsNone(self._record(level=0.002, stop_after=0.0))
+
+
 class FastPath(unittest.TestCase):
     """Answering these through the model cost about two seconds each."""
 
