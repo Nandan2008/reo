@@ -130,6 +130,15 @@ front of it that nobody asked for. So there are three tiers:
 
 Every command is written to `reo.log`.
 
+## The quick answers
+
+Time, date, battery, memory, disk, uptime and arithmetic are answered straight
+from the machine, with no model call at all - instantly, instead of the two
+seconds a round trip to Groq costs.
+
+Each pattern has to match the whole sentence, so "what time is it" is instant
+while "what time is it in Tokyo" still goes to the model, where it belongs.
+
 ## What it knows
 
 It answers from its own knowledge, and searches the web when the answer could have

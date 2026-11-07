@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config
+from . import config, fastpath
 from .brain import Brain
 from .listen import Listener
 from .speak import speak
@@ -72,6 +72,21 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0) -> bool:
     if normalize(text) in EXIT_PHRASES:
         speak("Goodbye.", ui)
         return False
+
+    # Things the machine already knows need no model: answering the time took
+    # two seconds of round trips before this.
+    quick = fastpath.answer(text)
+    if quick is not None:
+        if ui:
+            ui.set_state("thinking")
+        started = time.time()
+        speak(quick, ui)
+        # keep the exchange in history, or a follow-up loses the thread
+        brain.history.append({"role": "user", "content": text})
+        brain.history.append({"role": "assistant", "content": quick})
+        print(f"  [time] heard {heard_in:.1f}s  answered directly (no model)  "
+              f"spoke {time.time() - started:.1f}s")
+        return True
 
     if ui:
         ui.set_state("thinking")

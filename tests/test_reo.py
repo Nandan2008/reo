@@ -203,6 +203,45 @@ class Typing(unittest.TestCase):
         self.assertEqual(escape("plain text"), "plain text")
 
 
+class FastPath(unittest.TestCase):
+    """Answering these through the model cost about two seconds each."""
+
+    def test_answers_what_the_machine_knows(self):
+        from reo.fastpath import answer
+        for asked in ["what time is it", "time", "whats the date", "battery",
+                      "how much battery do i have", "how much ram am i using",
+                      "disk space", "uptime", "how long has my laptop been on"]:
+            with self.subTest(asked=asked):
+                self.assertIsNotNone(answer(asked))
+
+    def test_does_the_arithmetic(self):
+        from reo.fastpath import answer
+        self.assertEqual(answer("what is 25 times 17"), "425.")
+        self.assertEqual(answer("whats 100 divided by 4"), "25.")
+        self.assertEqual(answer("15 percent of 200"), "30.")
+        self.assertEqual(answer("what is the square root of 144"), "12.")
+
+    def test_leaves_the_model_its_work(self):
+        """A keyword search would have hijacked every one of these."""
+        from reo.fastpath import answer
+        for asked in ["what time is it in Tokyo", "what time does the shop close",
+                      "how is my battery health compared to last year",
+                      "remind me to charge the battery",
+                      "how much disk space does Chrome use",
+                      "tell me about the date of the moon landing",
+                      "calculate the risk of this plan", "what is love"]:
+            with self.subTest(asked=asked):
+                self.assertIsNone(answer(asked))
+
+    def test_arithmetic_cannot_run_code(self):
+        from reo.fastpath import answer
+        for asked in ["what is __import__('os').system('calc')",
+                      "calculate open('x','w')",
+                      "what is 2 times len('abc')"]:
+            with self.subTest(asked=asked):
+                self.assertIsNone(answer(asked))
+
+
 class SecondCopy(unittest.TestCase):
     """Four copies were found running at once. They fight over the sound device."""
 
