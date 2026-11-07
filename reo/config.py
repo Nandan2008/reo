@@ -18,10 +18,12 @@ TTS_MODEL = os.getenv("REO_TTS_MODEL", "canopylabs/orpheus-v1-english")
 TTS_VOICE = os.getenv("REO_TTS_VOICE", "autumn")
 # Which installed Windows voice to use; matched against its name. Blank = system default.
 VOICE_NAME = os.getenv("REO_VOICE", "zira")
+# Playback speed. Orpheus speaks slowly; 1.0 is its own pace.
+SPEECH_SPEED = float(os.getenv("REO_SPEECH_SPEED", "1.15"))
 
 SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = float(os.getenv("REO_SILENCE_THRESHOLD", "0.01"))
-SILENCE_SECONDS = float(os.getenv("REO_SILENCE_SECONDS", "0.7"))  # pause that means "done talking"
+SILENCE_SECONDS = float(os.getenv("REO_SILENCE_SECONDS", "0.5"))  # pause that means "done talking"
 WAIT_FOR_SPEECH_SECONDS = 6  # give up if you say nothing
 MAX_RECORD_SECONDS = 20
 

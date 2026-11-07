@@ -101,7 +101,32 @@ def _speak_orpheus(text: str) -> None:
 
     if channels > 1:
         audio = audio.reshape(-1, channels)
+    else:
+        audio, rate = _tighten(audio, rate)
     _play(audio, rate)
+
+
+def _tighten(audio, rate):
+    """Cut the dead air off each end and speak a little faster.
+
+    Orpheus pads generously: of a 2.56s clip for "Got it. Done.", 0.29s was
+    silence at the front and 0.55s at the back, with 1.72s of actual speech.
+    A third of the waiting was nothing at all.
+    """
+    if audio.ndim > 1 or len(audio) == 0:
+        return audio, rate
+
+    peak = np.abs(audio).max()
+    if peak:
+        loud = np.abs(audio) > peak * 0.02
+        if loud.any():
+            first = int(np.argmax(loud))
+            last = len(loud) - int(np.argmax(loud[::-1]))
+            pad = int(rate * 0.05)          # keep a little, or it clips the word
+            audio = audio[max(0, first - pad):min(len(audio), last + pad)]
+
+    # Claiming a higher sample rate plays it faster, with no resampling cost.
+    return audio, int(rate * config.SPEECH_SPEED)
 
 
 def _play(audio, rate) -> None:
