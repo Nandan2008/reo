@@ -29,7 +29,8 @@ SILENCE_SECONDS = float(os.getenv("REO_SILENCE_SECONDS", "0.5"))  # pause that m
 WAIT_FOR_SPEECH_SECONDS = 6  # give up if you say nothing
 MAX_RECORD_SECONDS = 20
 
-MAX_HISTORY_MESSAGES = 20
+# Each message is resent every request, against an 8000 token/minute cap.
+MAX_HISTORY_MESSAGES = 8
 
 # How reo is summoned:
 #   "hotkey" - a key combination toggles listening on and off

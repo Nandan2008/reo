@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config, fastpath
+from .stats import session as stats
 from .brain import Brain
 from .listen import Listener
 from .speak import speak
@@ -99,8 +100,10 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0) -> bool:
         # keep the exchange in history, or a follow-up loses the thread
         brain.history.append({"role": "user", "content": text})
         brain.history.append({"role": "assistant", "content": quick})
+        spoke = time.time() - started
+        stats.add_reply(heard_in, 0.0, spoke, used_model=False)
         print(f"  [time] heard {heard_in:.1f}s  answered directly (no model)  "
-              f"spoke {time.time() - started:.1f}s")
+              f"spoke {spoke:.1f}s")
         return True
 
     if ui:
@@ -120,6 +123,7 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0) -> bool:
 
     # Where a reply's time actually went, so slowness can be read off the log
     # instead of guessed at.
+    stats.add_reply(heard_in, thought, spoke)
     calls = sum(1 for m in brain.history if m.get("role") == "tool")
     print(f"  [time] heard {heard_in:.1f}s  thought {thought:.1f}s ({calls} tools)  "
           f"spoke {spoke:.1f}s  total {heard_in + thought + spoke:.1f}s")

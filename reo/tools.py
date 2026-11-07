@@ -141,10 +141,8 @@ FUNCTIONS = {
 TOOLS = [
     {
         "name": "open_app",
-        "description": ("Open a program, or bring it to the front if it is already "
-                        "running. Searches what Windows itself can launch, Store apps "
-                        "included. Always use this to open something: do not go hunting "
-                        "for an .exe with run_command, which misses Store apps entirely."),
+        "description": ("Open a program, or bring it forward if already running. Use this "
+                        "rather than hunting for an .exe, which misses Store apps."),
         "input_schema": {
             "type": "object",
             "properties": {"name": {"type": "string", "description": "e.g. 'notepad', 'claude'"}},
@@ -158,9 +156,8 @@ TOOLS = [
     },
     {
         "name": "open_website",
-        "description": ("Show a website to the user in their browser. This puts a window on "
-                        "their screen, so only use it when they asked to see something. "
-                        "To read a page yourself, use read_page instead."),
+        "description": ("Show the user a website in their browser. To read a page yourself, "
+                        "use read_page."),
         "input_schema": {
             "type": "object",
             "properties": {"url": {"type": "string", "description": "e.g. youtube.com"}},
@@ -169,9 +166,8 @@ TOOLS = [
     },
     {
         "name": "search_web",
-        "description": ("Look up current information on the web and read the results. "
-                        "Use this for anything you are unsure of or that may have changed: "
-                        "news, prices, scores, dates, who holds an office now."),
+        "description": ("Look up current information on the web: news, prices, who holds an "
+                        "office now."),
         "input_schema": {
             "type": "object",
             "properties": {"query": {"type": "string"}},
@@ -180,9 +176,8 @@ TOOLS = [
     },
     {
         "name": "type_text",
-        "description": ("Type text into another program. It brings that window to the "
-                        "front first, so the text lands where the user meant. Name the "
-                        "window loosely: 'claude', 'notepad', 'chrome'."),
+        "description": ("Type into another program, bringing that window to the front first. "
+                        "Name the window loosely: 'claude', 'notepad'."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -199,9 +194,8 @@ TOOLS = [
     },
     {
         "name": "press_key",
-        "description": ("Press a key in another window: enter, tab, escape, up, down, "
-                        "delete, a function key, or a combination like ctrl+a. Use this "
-                        "to send or submit something already typed."),
+        "description": ("Press a key in another window: enter, tab, escape, arrows, ctrl+a. "
+                        "Use it to send something already typed."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -219,12 +213,8 @@ TOOLS = [
     },
     {
         "name": "run_command",
-        "description": ("Run a PowerShell command on this Windows machine. Use it for "
-                        "anything the other tools do not cover: files, folders, settings, "
-                        "programs, system information. Prefer a specific tool when one "
-                        "fits. Just call it: never ask the user for permission first. "
-                        "Reading or reporting something always runs. Anything destructive "
-                        "comes back telling you to confirm, and that is when you ask."),
+        "description": ("Run a PowerShell command: files, settings, programs, system info. "
+                        "Reads run; destructive ones come back asking to be confirmed."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -237,9 +227,7 @@ TOOLS = [
     },
     {
         "name": "read_page",
-        "description": ("Read the text of a web page. Use it after search_web when the "
-                        "snippets do not contain the answer, such as a live price or a "
-                        "detail buried in an article."),
+        "description": ("Read a web page's text, when search snippets lack the answer."),
         "input_schema": {
             "type": "object",
             "properties": {"url": {"type": "string", "description": "Full URL to read"}},
