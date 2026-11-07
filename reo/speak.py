@@ -86,7 +86,8 @@ def _speak_pyttsx3(text: str, emotion: str) -> None:
 def _speak_orpheus(text: str) -> None:
     from openai import OpenAI
 
-    client = OpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL)
+    client = OpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL,
+                    timeout=config.REQUEST_TIMEOUT, max_retries=1)
     response = client.audio.speech.create(
         model=config.TTS_MODEL,
         voice=config.TTS_VOICE,

@@ -242,7 +242,7 @@ async function poll() {
     reo.stats(d.session, d.device);
     if (d.subtitle) reo.subtitle(d.subtitle);
   } catch (err) {
-    /* window closing */
+    window.__pollError = String(err);   // surfaced, not swallowed
   }
   polling = false;
 }

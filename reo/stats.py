@@ -13,7 +13,7 @@ FREE = True
 
 class Session:
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.requests = 0
         self.tokens = 0
         self.tool_calls = 0
@@ -42,12 +42,18 @@ class Session:
             if not used_model:
                 self.skipped_model += 1
 
+    def _average(self) -> float:
+        """Caller already holds the lock. Taking it again deadlocks: a plain
+        Lock is not reentrant, and rows() froze here on its first call, which
+        left every panel in the window empty."""
+        if not self.replies:
+            return 0.0
+        return (self.heard + self.thought + self.spoke) / self.replies
+
     @property
     def average(self) -> float:
         with self._lock:
-            if not self.replies:
-                return 0.0
-            return (self.heard + self.thought + self.spoke) / self.replies
+            return self._average()
 
     def rows(self):
         """(label, value) pairs for the SYSTEM panel."""
@@ -63,7 +69,7 @@ class Session:
                 ("HEARD", f"{self.heard / replies:.1f}s"),
                 ("THOUGHT", f"{self.thought / replies:.1f}s"),
                 ("SPOKE", f"{self.spoke / replies:.1f}s"),
-                ("PER REPLY", f"{self.average:.1f}s"),
+                ("PER REPLY", f"{self._average():.1f}s"),
             ]
 
 

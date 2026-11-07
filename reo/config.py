@@ -6,6 +6,8 @@ load_dotenv()
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+# Anything slower than this is a stall, not an answer.
+REQUEST_TIMEOUT = float(os.getenv("REO_REQUEST_TIMEOUT", "25"))
 WHISPER_MODEL = os.getenv("REO_WHISPER_MODEL", "base")
 # Blank detects the language each time. Set e.g. "en" or "hi" to pin it and save a step.
 LANGUAGE = os.getenv("REO_LANGUAGE", "").strip() or None

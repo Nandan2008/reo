@@ -33,8 +33,8 @@ class Bridge:
         # Deliberately no window attribute: pywebview walks every attribute of
         # the object it exposes, and a window here sent it recursing through
         # the native widget tree until the stack ran out.
-        self.pending = queue.Queue()
-        self.subtitle = ""
+        self._pending = queue.Queue()
+        self._subtitle = ""
 
     # --- called from the page ---------------------------------------------
 
@@ -42,11 +42,11 @@ class Bridge:
         events = []
         try:
             while True:
-                events.append(self.pending.get_nowait())
+                events.append(self._pending.get_nowait())
         except queue.Empty:
             pass
         return {"events": events, "session": stats.rows(), "device": _device(),
-                "subtitle": self.subtitle}
+                "subtitle": self._subtitle}
 
     def toggle_fullscreen(self):
         if _window is not None:
@@ -61,7 +61,7 @@ class Display:
     def __init__(self, title="REO", subtitle=""):
         self.closed = False
         self.bridge = Bridge()
-        self.bridge.subtitle = subtitle
+        self.bridge._subtitle = subtitle
         self.window = webview.create_window(
             title, str(PAGE), width=1280, height=780,
             background_color="#04070b", fullscreen=True, js_api=self.bridge,
@@ -73,14 +73,17 @@ class Display:
     # ---- called from the voice thread -------------------------------------
 
     def set_state(self, name: str) -> None:
-        self.bridge.pending.put(["state", name])
+        self.bridge._pending.put(["state", name])
 
     def line(self, who: str, text: str) -> None:
-        self.bridge.pending.put(["line", who, text])
+        self.bridge._pending.put(["line", who, text])
 
     def run(self, worker) -> None:
         threading.Thread(target=worker, daemon=True).start()
-        webview.start()          # blocks until the window closes
+        # http_server serves the page from 127.0.0.1 instead of file://.
+        # Over file:// WebView2 never injected window.pywebview, so the page
+        # rendered but could never ask python for anything.
+        webview.start(http_server=True)   # blocks until the window closes
         self.closed = True
 
     def _on_closed(self) -> None:

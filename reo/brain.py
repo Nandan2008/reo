@@ -48,7 +48,10 @@ OPENAI_TOOLS = [
 
 class Brain:
     def __init__(self):
-        self.client = OpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL)
+        # Without a timeout a stalled call blocks the whole assistant: reo
+        # transcribed a question and then simply never spoke again.
+        self.client = OpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL,
+                             timeout=config.REQUEST_TIMEOUT, max_retries=1)
         self.history = []
 
     def _complete(self, with_tools: bool):
