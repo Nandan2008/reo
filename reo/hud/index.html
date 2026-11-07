@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>REO</title>
+<style>
+  :root {
+    --bg: #04070b;
+    --accent: #19d2e6;
+    --accent-soft: #19d2e633;
+    --text: #c6dcee;
+    --muted: #51687d;
+    --edge: #16293a;
+    --spin: 26s;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 Consolas, "Cascadia Mono", monospace;
+    height: 100vh;
+    overflow: hidden;
+    /* a faint vignette so the reactor is the brightest thing on screen */
+    background-image: radial-gradient(ellipse at 28% 50%, #0a141d 0%, var(--bg) 62%);
+  }
+
+  .frame { position: fixed; inset: 18px; pointer-events: none; }
+  .frame span { position: absolute; width: 54px; height: 54px; border: 1px solid var(--edge); }
+  .frame span:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+  .frame span:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+  .frame span:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+  .frame span:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+
+  header {
+    position: fixed; top: 34px; left: 46px; right: 46px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    border-bottom: 1px solid var(--edge); padding-bottom: 14px;
+  }
+  h1 { font-size: 23px; letter-spacing: .42em; font-weight: 700; }
+  h1 em { color: var(--accent); font-style: normal; }
+  .sub { color: var(--muted); font-size: 10px; letter-spacing: .22em; margin-top: 5px; }
+  .clock { font-size: 19px; text-align: right; }
+  .date { color: var(--muted); font-size: 10px; letter-spacing: .18em; text-align: right; }
+
+  main {
+    position: fixed; inset: 110px 46px 56px 46px;
+    display: grid; grid-template-columns: minmax(360px, 34%) 1fr 212px; gap: 34px;
+  }
+
+  /* ---- the reactor ---- */
+  .stage { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .reactor { position: relative; width: 340px; height: 340px; }
+  .reactor > * { position: absolute; inset: 0; border-radius: 50%; }
+
+  .halo {
+    background: radial-gradient(circle, var(--accent) 0%, transparent 62%);
+    opacity: .20; filter: blur(34px); animation: breathe 4.6s ease-in-out infinite;
+  }
+  .housing { border: 2px solid color-mix(in srgb, var(--accent) 48%, transparent); }
+  .hairline { inset: 14px; border: 1px solid var(--edge); }
+
+  /* coils: a conic gradient cut into a ring by a mask */
+  .coils {
+    inset: 30px;
+    background: repeating-conic-gradient(
+      var(--accent) 0deg 23deg, transparent 23deg 36deg);
+    -webkit-mask: radial-gradient(circle, transparent 60%, #000 61%, #000 84%, transparent 85%);
+    mask: radial-gradient(circle, transparent 60%, #000 61%, #000 84%, transparent 85%);
+    filter: drop-shadow(0 0 9px var(--accent-soft));
+    animation: turn var(--spin) linear infinite;
+  }
+  .sweep {
+    inset: 6px;
+    background: conic-gradient(from 0deg, transparent 0deg 312deg, var(--accent) 352deg, transparent 360deg);
+    -webkit-mask: radial-gradient(circle, transparent 93%, #000 94%);
+    mask: radial-gradient(circle, transparent 93%, #000 94%);
+    animation: turn 7s linear infinite;
+  }
+  .sweep.back { inset: 48px; animation: turn-back 11s linear infinite; opacity: .6; }
+
+  .chamber { inset: 92px; border: 2px solid color-mix(in srgb, var(--accent) 66%, transparent); }
+  .spokes {
+    inset: 92px;
+    background: repeating-conic-gradient(
+      color-mix(in srgb, var(--accent) 70%, transparent) 0deg 1.6deg, transparent 1.6deg 60deg);
+    -webkit-mask: radial-gradient(circle, transparent 74%, #000 75%);
+    mask: radial-gradient(circle, transparent 74%, #000 75%);
+    animation: turn-back 19s linear infinite;
+  }
+
+  .core {
+    inset: 124px;
+    background: radial-gradient(circle, #ffffff 0%, #ffffff 16%,
+                color-mix(in srgb, var(--accent) 86%, #fff) 38%, var(--accent) 62%, transparent 76%);
+    box-shadow: 0 0 46px 10px var(--accent-soft), 0 0 110px 26px var(--accent-soft);
+    animation: breathe 2.9s ease-in-out infinite;
+  }
+
+  @keyframes turn { to { transform: rotate(360deg); } }
+  @keyframes turn-back { to { transform: rotate(-360deg); } }
+  @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+
+  .state {
+    margin-top: 26px; letter-spacing: .3em; font-weight: 700; font-size: 14px;
+    color: var(--accent); text-shadow: 0 0 16px var(--accent-soft);
+  }
+
+  /* ---- transcript ---- */
+  .label { color: var(--muted); font-size: 10px; letter-spacing: .24em; }
+  .panel-head { border-bottom: 1px solid var(--edge); padding-bottom: 7px; margin-bottom: 14px; }
+  #log { overflow: hidden; display: flex; flex-direction: column; gap: 9px; }
+  .line { display: grid; grid-template-columns: 42px 1fr; gap: 6px; animation: rise .22s ease-out; }
+  .line .who { color: var(--muted); font-size: 10px; padding-top: 2px; }
+  .line.reo .what { color: var(--accent); }
+  .line.note .what { color: var(--muted); font-style: italic; }
+  @keyframes rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; } }
+
+  /* ---- system panel ---- */
+  .stat { display: flex; justify-content: space-between; font-size: 11px; padding: 4px 0; }
+  .stat b { color: var(--accent); font-weight: 600; }
+  .bar { height: 2px; background: #10202d; margin: 3px 0 9px; }
+  .bar i { display: block; height: 100%; background: var(--accent); transition: width .5s; }
+  .group { margin-bottom: 20px; }
+
+  footer {
+    position: fixed; left: 46px; bottom: 26px;
+    color: var(--muted); font-size: 9px; letter-spacing: .2em;
+  }
+</style>
+</head>
+<body>
+  <div class="frame"><span></span><span></span><span></span><span></span></div>
+
+  <header>
+    <div>
+      <h1>R E <em>O</em></h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div>
+      <div class="clock" id="clock">--:--:--</div>
+      <div class="date" id="date"></div>
+    </div>
+  </header>
+
+  <main>
+    <div class="stage">
+      <div class="reactor">
+        <div class="halo"></div>
+        <div class="sweep"></div>
+        <div class="housing"></div>
+        <div class="hairline"></div>
+        <div class="coils"></div>
+        <div class="sweep back"></div>
+        <div class="spokes"></div>
+        <div class="chamber"></div>
+        <div class="core"></div>
+      </div>
+      <div class="state" id="state">IDLE</div>
+    </div>
+
+    <div>
+      <div class="panel-head label">TRANSCRIPT</div>
+      <div id="log"></div>
+    </div>
+
+    <div>
+      <div class="panel-head label">SYSTEM</div>
+      <div class="group" id="session"></div>
+      <div class="panel-head label">DEVICE</div>
+      <div class="group" id="device"></div>
+    </div>
+  </main>
+
+  <footer>ESC FULLSCREEN &nbsp;&nbsp;&nbsp; SAY GOODBYE TO QUIT</footer>
+
+<script>
+const ACCENT = {
+  idle:      ["#2b8fb8", "34s"],
+  listening: ["#19d2e6", "9s"],
+  thinking:  ["#e0a93a", "13s"],
+  speaking:  ["#2fd389", "20s"],
+};
+
+window.reo = {
+  state(name) {
+    const [colour, spin] = ACCENT[name] || ACCENT.idle;
+    const root = document.documentElement.style;
+    root.setProperty("--accent", colour);
+    root.setProperty("--accent-soft", colour + "40");
+    root.setProperty("--spin", spin);
+    document.getElementById("state").textContent = name.toUpperCase();
+  },
+  line(who, text) {
+    const log = document.getElementById("log");
+    const row = document.createElement("div");
+    row.className = "line " + who;
+    const label = who === "you" ? "YOU" : who === "reo" ? "REO" : "";
+    row.innerHTML = `<div class="who"></div><div class="what"></div>`;
+    row.children[0].textContent = label;
+    row.children[1].textContent = text;
+    log.appendChild(row);
+    while (log.children.length > 15) log.removeChild(log.firstChild);
+  },
+  subtitle(text) { document.getElementById("subtitle").textContent = text.toUpperCase(); },
+  stats(session, device) {
+    const draw = (id, rows) => {
+      document.getElementById(id).innerHTML = rows.map(([k, v, pct]) =>
+        `<div class="stat"><span>${k}</span><b>${v}</b></div>` +
+        (pct === undefined ? "" : `<div class="bar"><i style="width:${pct}%"></i></div>`)
+      ).join("");
+    };
+    draw("session", session);
+    draw("device", device);
+  },
+};
+
+setInterval(() => {
+  const now = new Date();
+  document.getElementById("clock").textContent = now.toLocaleTimeString("en-GB");
+  document.getElementById("date").textContent =
+    now.toDateString().toUpperCase();
+}, 1000);
+</script>
+</body>
+</html>

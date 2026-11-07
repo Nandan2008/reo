@@ -4,6 +4,7 @@ from datetime import datetime
 from openai import BadRequestError, OpenAI
 
 from . import config
+from .stats import session
 from .tools import TOOLS, run_tool
 
 SYSTEM = (
@@ -64,7 +65,10 @@ class Brain:
         if with_tools:
             kwargs.update(tools=OPENAI_TOOLS, tool_choice="auto")
         try:
-            return self.client.chat.completions.create(**kwargs)
+            response = self.client.chat.completions.create(**kwargs)
+            usage = getattr(response, "usage", None)
+            session.add_request(getattr(usage, "total_tokens", 0) if usage else 0)
+            return response
         except BadRequestError as e:
             if with_tools and "was not in request.tools" in str(e):
                 print("  [brain] model reached for an unavailable tool; answering without tools")
@@ -95,6 +99,7 @@ class Brain:
                         for tc in msg.tool_calls
                     ],
                 })
+                session.add_tools(len(msg.tool_calls))
                 for tc in msg.tool_calls:
                     try:
                         args = json.loads(tc.function.arguments or "{}")

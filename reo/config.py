@@ -34,8 +34,13 @@ MAX_HISTORY_MESSAGES = 20
 #   "wake"   - always listening, answers to its name
 #   "push"   - press Enter in its window first
 MODE = os.getenv("REO_MODE", "hotkey")
-# Show the window. Set REO_UI=0 for console only.
-UI = os.getenv("REO_UI", "1") not in ("0", "false", "no")
+# The window: "web" is the HTML one (glow, gradients), "tk" the plain canvas
+# fallback, "off" for console only.
+UI = os.getenv("REO_UI", "web").lower()
+if UI in ("1", "true", "yes"):
+    UI = "web"
+elif UI in ("0", "false", "no"):
+    UI = "off"
 # Let reo run commands on the machine. Off unless you turn it on: it is driven
 # by speech that mishears, and by web pages that can be written to steer it.
 ALLOW_SHELL = os.getenv("REO_ALLOW_SHELL", "0") not in ("0", "false", "no")

@@ -27,14 +27,16 @@ STATES = {
     "speaking":  ("#2fd389", 1.10),
 }
 
-# Each ring: radius as a fraction of the reactor, line width, arc span, direction.
-RINGS = (
-    (1.00, 2, 110, +1.00),
-    (0.86, 1, 40,  -1.60),
-    (0.72, 3, 200, +0.70),
-    (0.56, 1, 70,  -2.30),
-    (0.40, 2, 150, +1.30),
-)
+COILS = 10               # the windings around the core
+GLOW_LAYERS = 7          # Tk has no alpha, so a halo is rings fading to the background
+
+
+def _blend(first: str, second: str, amount: float) -> str:
+    """Mix two #rrggbb colours. Tk has no alpha, so glow is mixed by hand."""
+    amount = max(0.0, min(1.0, amount))
+    a = [int(first[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(second[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * amount):02x}" for x, y in zip(a, b))
 
 TRANSCRIPT = 14          # lines kept on screen
 FRAME_MS = 40            # 25fps is plenty for a turning ring
@@ -212,31 +214,72 @@ class Display:
         panel = min(520, max(360, w * 0.42))
         return panel, min(panel * 0.36, (h - 220) * 0.42)
 
-    def _reactor(self, cx, cy, size, colour) -> None:
-        c = self.canvas
-        for fraction, width, span, rate in RINGS:
-            r = size * fraction
-            c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=GRID, width=1, tags=SPIN)
-            c.create_arc(cx - r, cy - r, cx + r, cy + r, start=(self._spin * rate) % 360,
-                         extent=span, style="arc", outline=colour, width=width, tags=SPIN)
+    def _ring(self, cx, cy, r, **kw):
+        self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, tags=SPIN, **kw)
 
-        outer = size * 1.12
-        for i in range(0, 60, 2):      # every other tick: half the items, same look
+    def _reactor(self, cx, cy, size, colour) -> None:
+        """An arc reactor: a glowing core inside a ring of coils.
+
+        Five thin circles was not it. The light has to come from the middle, so
+        the core is layered from near-white outwards and a halo fades into the
+        background underneath everything else.
+        """
+        c = self.canvas
+        pulse = 1 + 0.07 * math.sin(self._pulse)
+
+        # halo, drawn first so everything sits on top of it
+        for i in range(GLOW_LAYERS, 0, -1):
+            fraction = i / GLOW_LAYERS
+            r = size * (0.62 + 0.55 * fraction) * pulse
+            self._ring(cx, cy, r, outline=_blend(BACKGROUND, colour, 0.16 * (1 - fraction)),
+                       width=max(2, int(size * 0.10 * fraction)))
+
+        # housing
+        self._ring(cx, cy, size, outline=_blend(BACKGROUND, colour, 0.55), width=3)
+        self._ring(cx, cy, size * 0.95, outline=GRID, width=1)
+
+        # the coils: thick segments with gaps, turning slowly
+        gap, span = 36.0 / COILS, 324.0 / COILS
+        for i in range(COILS):
+            start = (self._spin * 0.25 + i * (span + gap)) % 360
+            lit = (i % 3 == 0)
+            for r, width in ((size * 0.80, max(3, size * 0.11)),):
+                c.create_arc(cx - r, cy - r, cx + r, cy + r, start=start, extent=span,
+                             style="arc", width=width, tags=SPIN,
+                             outline=colour if lit else _blend(BACKGROUND, colour, 0.45))
+
+        # inner chamber and its spokes
+        self._ring(cx, cy, size * 0.60, outline=_blend(BACKGROUND, colour, 0.70), width=2)
+        for i in range(6):
+            angle = math.radians(i * 60 - self._spin * 0.6)
+            cos, sin = math.cos(angle), math.sin(angle)
+            c.create_line(cx + size * 0.40 * cos, cy + size * 0.40 * sin,
+                          cx + size * 0.58 * cos, cy + size * 0.58 * sin,
+                          fill=_blend(BACKGROUND, colour, 0.8), width=2, tags=SPIN)
+
+        # the core, bright in the middle and falling off outwards
+        for step, (scale, mix) in enumerate(((0.40, 0.35), (0.30, 0.60),
+                                             (0.22, 0.85), (0.15, 1.00))):
+            r = size * scale * pulse
+            self._ring(cx, cy, r, fill=_blend(colour, "#ffffff", mix * 0.55),
+                       outline="")
+        r = size * 0.07 * pulse
+        self._ring(cx, cy, r, fill="#ffffff", outline="")
+
+        # a sweep around the outside, so it reads as turning
+        for rate, extent, width in ((1.0, 70, 2), (-1.7, 28, 2)):
+            r = size * 1.10
+            c.create_arc(cx - r, cy - r, cx + r, cy + r, start=(self._spin * rate) % 360,
+                         extent=extent, style="arc", outline=colour, width=width, tags=SPIN)
+
+        outer = size * 1.20
+        for i in range(0, 60, 3):
             angle = math.radians(i * 6 + self._spin * 0.25)
-            length = 12 if i % 5 == 0 else 5
-            fill = colour if i % 15 == 0 else EDGE
+            length = 10 if i % 5 == 0 else 4
             cos, sin = math.cos(angle), math.sin(angle)
             c.create_line(cx + outer * cos, cy + outer * sin,
                           cx + (outer + length) * cos, cy + (outer + length) * sin,
-                          fill=fill, tags=SPIN)
-
-        core = size * 0.18 * (1 + 0.10 * math.sin(self._pulse))
-        for scale, width in ((1.0, 2), (0.62, 1)):
-            r = core * scale
-            c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=colour, width=width,
-                          tags=SPIN)
-        r = core * 0.30
-        c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=colour, outline="", tags=SPIN)
+                          fill=colour if i % 15 == 0 else EDGE, tags=SPIN)
 
     def _tick(self) -> None:
         colour, speed = STATES[self._state]

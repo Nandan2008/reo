@@ -160,8 +160,15 @@ def main():
         toggle.start()
 
     ui = None
-    if config.UI:
-        from .ui import Display
+    if config.UI != "off":
+        if config.UI == "tk":
+            from .ui import Display
+        else:
+            try:
+                from .webui import Display
+            except Exception as e:
+                print(f"  [ui] the web window is unavailable ({e}); using the plain one.")
+                from .ui import Display
         hint = {"hotkey": f"{combination} to listen",
                 "wake": f'say "{woken_by()}"',
                 "push": "press Enter in the console"}.get(config.MODE, "")
