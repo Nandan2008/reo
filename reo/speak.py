@@ -24,7 +24,7 @@ VOICE_SETTINGS = {
 
 TAG = re.compile(r"^\s*\[(\w+)]\s*")
 
-PLAY_GRACE = 3.0         # seconds past the clip length before giving up
+PLAY_GRACE = 5.0         # seconds past the clip length before giving up
 _orpheus_failed = False  # fall back quietly after the first failure
 
 
@@ -138,7 +138,9 @@ def _play(audio, rate) -> None:
     """
     expected = len(audio) / rate
     sd.play(audio, rate)
-    deadline = time.monotonic() + expected + PLAY_GRACE
+    # Generous: under load the clip really can take longer than its own
+    # length, and cutting a reply off mid-word is worse than waiting.
+    deadline = time.monotonic() + expected * 2 + PLAY_GRACE
     while time.monotonic() < deadline:
         stream = sd.get_stream()
         if stream is None or not stream.active:

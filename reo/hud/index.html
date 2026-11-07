@@ -226,6 +226,28 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// The page pulls from python rather than python pushing into the page:
+// WebView2 only accepts calls on its own thread, and pushing from a worker
+// filled the console with COM errors.
+let polling = false;
+async function poll() {
+  if (polling || !window.pywebview || !pywebview.api) return;
+  polling = true;
+  try {
+    const d = await pywebview.api.poll();
+    for (const e of d.events) {
+      if (e[0] === "state") reo.state(e[1]);
+      else if (e[0] === "line") reo.line(e[1], e[2]);
+    }
+    reo.stats(d.session, d.device);
+    if (d.subtitle) reo.subtitle(d.subtitle);
+  } catch (err) {
+    /* window closing */
+  }
+  polling = false;
+}
+setInterval(poll, 120);
+
 setInterval(() => {
   const now = new Date();
   document.getElementById("clock").textContent = now.toLocaleTimeString("en-GB");

@@ -18,85 +18,73 @@ from . import config
 from .stats import session as stats
 
 PAGE = Path(__file__).resolve().parent / "hud" / "index.html"
-PUMP_MS = 0.08          # how often queued updates are pushed to the page
+_window = None          # kept out of the exposed object on purpose
 
 
-class Keys:
-    """What the page is allowed to ask the window to do."""
+class Bridge:
+    """What the page may ask for. The page pulls; python never pushes.
+
+    WebView2 only allows calls from its own UI thread, and evaluate_js from a
+    worker filled the console with COM errors. Letting the page poll turns that
+    round: every call arrives on the thread WebView2 wants.
+    """
 
     def __init__(self):
-        self.window = None
+        # Deliberately no window attribute: pywebview walks every attribute of
+        # the object it exposes, and a window here sent it recursing through
+        # the native widget tree until the stack ran out.
+        self.pending = queue.Queue()
+        self.subtitle = ""
+
+    # --- called from the page ---------------------------------------------
+
+    def poll(self):
+        events = []
+        try:
+            while True:
+                events.append(self.pending.get_nowait())
+        except queue.Empty:
+            pass
+        return {"events": events, "session": stats.rows(), "device": _device(),
+                "subtitle": self.subtitle}
 
     def toggle_fullscreen(self):
-        if self.window:
-            self.window.toggle_fullscreen()
+        if _window is not None:
+            _window.toggle_fullscreen()
 
     def quit(self):
-        if self.window:
-            self.window.destroy()
+        if _window is not None:
+            _window.destroy()
 
 
 class Display:
     def __init__(self, title="REO", subtitle=""):
-        self._events = queue.Queue()
-        self._subtitle = subtitle
-        self._ready = False
         self.closed = False
-        self.keys = Keys()
+        self.bridge = Bridge()
+        self.bridge.subtitle = subtitle
         self.window = webview.create_window(
             title, str(PAGE), width=1280, height=780,
-            background_color="#04070b", fullscreen=True, js_api=self.keys,
+            background_color="#04070b", fullscreen=True, js_api=self.bridge,
         )
-        self.keys.window = self.window
+        global _window
+        _window = self.window
         self.window.events.closed += self._on_closed
 
     # ---- called from the voice thread -------------------------------------
 
     def set_state(self, name: str) -> None:
-        self._events.put(("state", (name,)))
+        self.bridge.pending.put(["state", name])
 
     def line(self, who: str, text: str) -> None:
-        self._events.put(("line", (who, text)))
+        self.bridge.pending.put(["line", who, text])
 
     def run(self, worker) -> None:
         threading.Thread(target=worker, daemon=True).start()
-        threading.Thread(target=self._pump, daemon=True).start()
         webview.start()          # blocks until the window closes
         self.closed = True
 
-    # ---- the pump ----------------------------------------------------------
-
     def _on_closed(self) -> None:
         self.closed = True
-
-    def _call(self, function: str, *args) -> None:
-        payload = ", ".join(json.dumps(a) for a in args)
-        try:
-            self.window.evaluate_js(f"window.reo && reo.{function}({payload})")
-        except Exception:
-            pass                 # the window went away mid-update
-
-    def _pump(self) -> None:
-        """Push queued updates and refresh the figures, off the UI thread."""
-        time.sleep(1.2)          # let the page load before talking to it
-        if self._subtitle:
-            self._call("subtitle", self._subtitle)
-        last_stats = 0.0
-
-        while not self.closed:
-            try:
-                while True:
-                    name, args = self._events.get_nowait()
-                    self._call(name, *args)
-            except queue.Empty:
-                pass
-
-            now = time.monotonic()
-            if now - last_stats > 1.0:
-                last_stats = now
-                self._call("stats", stats.rows(), _device())
-
-            time.sleep(PUMP_MS)
 
 
 def _device():
