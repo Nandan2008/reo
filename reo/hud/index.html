@@ -173,7 +173,7 @@
     </div>
   </main>
 
-  <footer>ESC FULLSCREEN &nbsp;&nbsp;&nbsp; SAY GOODBYE TO QUIT</footer>
+  <footer>ESC WINDOWED &nbsp;&nbsp;&nbsp; CTRL+Q CLOSE &nbsp;&nbsp;&nbsp; SAY GOODBYE TO QUIT</footer>
 
 <script>
 const ACCENT = {
@@ -215,6 +215,16 @@ window.reo = {
     draw("device", device);
   },
 };
+
+// Escape leaves fullscreen, Ctrl+Q closes. Without these the fullscreen
+// window had no way out at all.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    window.pywebview && pywebview.api && pywebview.api.toggle_fullscreen();
+  } else if (e.key === "q" && (e.ctrlKey || e.metaKey)) {
+    window.pywebview && pywebview.api && pywebview.api.quit();
+  }
+});
 
 setInterval(() => {
   const now = new Date();

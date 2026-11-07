@@ -194,10 +194,11 @@ def _loop(listener, brain, waker, toggle, combination, ui):
                 if ui:
                     ui.set_state("listening")
                 started = time.time()
-                text = listener.listen()
+                # Pressing the key again ends the recording and answers what was
+                # said. It used to throw the words away, which looked like reo
+                # ignoring you entirely.
+                text = listener.listen(stop_now=lambda: not toggle.listening)
                 heard_in = time.time() - started
-                if not toggle.listening:
-                    continue          # switched off while it was recording
             elif waker:
                 print(f'\n[Listening for "{woken_by()}"]')
                 text = waker.wait()

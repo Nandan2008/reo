@@ -21,16 +21,33 @@ PAGE = Path(__file__).resolve().parent / "hud" / "index.html"
 PUMP_MS = 0.08          # how often queued updates are pushed to the page
 
 
+class Keys:
+    """What the page is allowed to ask the window to do."""
+
+    def __init__(self):
+        self.window = None
+
+    def toggle_fullscreen(self):
+        if self.window:
+            self.window.toggle_fullscreen()
+
+    def quit(self):
+        if self.window:
+            self.window.destroy()
+
+
 class Display:
     def __init__(self, title="REO", subtitle=""):
         self._events = queue.Queue()
         self._subtitle = subtitle
         self._ready = False
         self.closed = False
+        self.keys = Keys()
         self.window = webview.create_window(
             title, str(PAGE), width=1280, height=780,
-            background_color="#04070b", fullscreen=True,
+            background_color="#04070b", fullscreen=True, js_api=self.keys,
         )
+        self.keys.window = self.window
         self.window.events.closed += self._on_closed
 
     # ---- called from the voice thread -------------------------------------

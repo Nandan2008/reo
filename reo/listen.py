@@ -13,7 +13,7 @@ class Listener:
         print("Loading speech model (first run downloads it)...")
         self.model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
 
-    def _record(self):
+    def _record(self, stop_now=None):
         block = int(config.SAMPLE_RATE * BLOCK_SECONDS)
         max_blocks = int(config.MAX_RECORD_SECONDS / BLOCK_SECONDS)
         wait_blocks = int(config.WAIT_FOR_SPEECH_SECONDS / BLOCK_SECONDS)
@@ -23,6 +23,8 @@ class Listener:
         with sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1,
                             dtype="float32", blocksize=block) as stream:
             for i in range(max_blocks):
+                if stop_now is not None and stop_now():
+                    break        # they pressed the key again: take what we have
                 data, _ = stream.read(block)
                 frames.append(data.copy())
                 loud = float(np.sqrt(np.mean(data ** 2))) > config.SILENCE_THRESHOLD
@@ -39,8 +41,8 @@ class Listener:
                     print(f"  (stopped at the {config.MAX_RECORD_SECONDS} second limit)")
         return np.concatenate(frames).flatten() if heard else None
 
-    def listen(self) -> str:
-        audio = self._record()
+    def listen(self, stop_now=None) -> str:
+        audio = self._record(stop_now)
         if audio is None:
             return ""
         segments, _ = self.model.transcribe(au.normalize(audio), language=config.LANGUAGE,
