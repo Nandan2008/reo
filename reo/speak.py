@@ -1,6 +1,7 @@
 """Speech output. Offline pyttsx3 by default, Groq's Orpheus when asked for."""
 import io
 import re
+import time
 import wave
 
 import numpy as np
@@ -23,6 +24,7 @@ VOICE_SETTINGS = {
 
 TAG = re.compile(r"^\s*\[(\w+)]\s*")
 
+PLAY_GRACE = 3.0         # seconds past the clip length before giving up
 _orpheus_failed = False  # fall back quietly after the first failure
 
 
@@ -92,11 +94,33 @@ def _speak_orpheus(text: str) -> None:
         response_format="wav",
     )
     with wave.open(io.BytesIO(response.read())) as w:
+        # Groq sends a streaming header claiming 2147483647 frames, so the count
+        # is meaningless; what readframes actually returns is the clip.
         audio = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
-        if w.getnchannels() > 1:
-            audio = audio.reshape(-1, w.getnchannels())
-        sd.play(audio, w.getframerate())
-        sd.wait()
+        channels, rate = w.getnchannels(), w.getframerate()
+
+    if channels > 1:
+        audio = audio.reshape(-1, channels)
+    _play(audio, rate)
+
+
+def _play(audio, rate) -> None:
+    """Play it, but never wait forever.
+
+    sd.wait() blocks with no timeout. When something else holds the sound device
+    - a second copy of reo, say - it never returns, and reo looks frozen. One
+    measured hang ran to 72,304 seconds.
+    """
+    expected = len(audio) / rate
+    sd.play(audio, rate)
+    deadline = time.monotonic() + expected + PLAY_GRACE
+    while time.monotonic() < deadline:
+        stream = sd.get_stream()
+        if stream is None or not stream.active:
+            return
+        time.sleep(0.05)
+    sd.stop()
+    print(f"  [voice] playback did not finish in {expected + PLAY_GRACE:.0f}s; moving on.")
 
 
 def speak(text: str, ui=None) -> None:

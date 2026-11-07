@@ -34,6 +34,27 @@ def _tee_to_logfile():
     sys.stdout = Tee()
 
 
+def already_running() -> int:
+    """PID of another reo, or 0. Two of them fight over the microphone and the
+    speaker, and the loser waits forever on a sound device it cannot have."""
+    import os
+
+    try:
+        import psutil
+    except ImportError:
+        return 0
+    mine = os.getpid()
+    for process in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            pid, cmdline = process.info["pid"], process.info["cmdline"] or []
+        except Exception:
+            continue
+        if pid != mine and any("reo" == part or part.endswith("reo") for part in cmdline):
+            if any(part == "-m" for part in cmdline):
+                return pid
+    return 0
+
+
 def woken_by() -> str:
     """What to tell the user to say, which depends on the wake engine."""
     if config.WAKE_ENGINE == "phrase":
@@ -82,6 +103,13 @@ def main():
 
     if not config.LLM_API_KEY or config.LLM_API_KEY == "your-groq-key-here":
         print("Missing LLM_API_KEY. Copy .env.example to .env and add your free Groq key.")
+        return
+
+    other = already_running()
+    if other:
+        print(f"reo is already running (process {other}). Close that one first.")
+        print("Two copies fight over the microphone and the speaker, which looks")
+        print("exactly like reo being slow or frozen.")
         return
 
     listener, brain = Listener(), Brain()

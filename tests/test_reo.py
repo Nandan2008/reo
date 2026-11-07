@@ -203,6 +203,61 @@ class Typing(unittest.TestCase):
         self.assertEqual(escape("plain text"), "plain text")
 
 
+class SecondCopy(unittest.TestCase):
+    """Four copies were found running at once. They fight over the sound device."""
+
+    @staticmethod
+    def _with_processes(entries):
+        from unittest import mock
+        import psutil
+        fakes = [mock.Mock(info={"pid": pid, "cmdline": cmd}) for pid, cmd in entries]
+        return mock.patch.object(psutil, "process_iter", return_value=fakes)
+
+    def test_spots_another_reo(self):
+        import os
+        from reo.__main__ import already_running
+        with self._with_processes([(os.getpid() + 1, ["python.exe", "-m", "reo"])]):
+            self.assertTrue(already_running())
+
+    def test_ignores_itself(self):
+        import os
+        from reo.__main__ import already_running
+        with self._with_processes([(os.getpid(), ["python.exe", "-m", "reo"])]):
+            self.assertFalse(already_running())
+
+    def test_ignores_unrelated_python(self):
+        import os
+        from reo.__main__ import already_running
+        with self._with_processes([(os.getpid() + 1, ["python.exe", "manage.py"])]):
+            self.assertFalse(already_running())
+
+
+class Playback(unittest.TestCase):
+    """sd.wait() has no timeout. One hang ran to 72,304 seconds."""
+
+    @staticmethod
+    def _play_with(stream):
+        from unittest import mock
+        from reo import speak
+        audio = np.zeros(1600, dtype=np.int16)        # 0.1s at 16kHz
+        with mock.patch.object(speak.sd, "play"), \
+             mock.patch.object(speak.sd, "stop") as stop, \
+             mock.patch.object(speak.sd, "get_stream", return_value=stream), \
+             mock.patch.object(speak, "PLAY_GRACE", 0.3):
+            speak._play(audio, 16000)
+        return stop
+
+    def test_returns_when_the_clip_finishes(self):
+        from unittest import mock
+        stop = self._play_with(mock.Mock(active=False))
+        stop.assert_not_called()
+
+    def test_gives_up_when_the_device_never_frees(self):
+        from unittest import mock
+        stop = self._play_with(mock.Mock(active=True))
+        stop.assert_called_once()
+
+
 class ShellGuards(unittest.TestCase):
     """Voice mishears and web pages can steer a model, so these matter.
 
