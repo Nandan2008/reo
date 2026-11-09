@@ -162,12 +162,28 @@ changed - who holds an office now, today's news, a current price. When the searc
 snippets do not hold the answer it opens one of the results and reads it, so it can
 tell you a live figure rather than handing you a browser tab.
 
+For a fact that does not change it reads Wikipedia instead, through Wikipedia's
+own API rather than by scraping the article: about 0.3s, and a written summary
+rather than navigation furniture. An ambiguous word reaches the article and not
+the list of articles, so "Mercury" gets the planet and "Python" the language.
+
 It is told today's date, and told never to put a remembered year into a search. That
 one rule matters: asked for the most recent World Cup it used to search for the year
 it half-remembered, so the web only ever confirmed what it already believed.
 
-What it still cannot do: remember anything after you close it, or see your files,
-screen or email.
+## What it remembers
+
+Tell it something about yourself and it keeps it. "My name is Nandan", "I prefer
+short answers", "I live in Hyderabad" - these go into `memory.json` beside the log
+and travel with every request afterwards, so reo simply knows them rather than
+having to go and look. Say "forget that I live in Hyderabad" to drop one.
+
+The file is capped: 24 facts go in front of the model and 60 are kept on disk,
+because every one of them is resent on every request and the free tier counts
+tokens by the minute. The file is yours - plain JSON, gitignored, delete it to
+start over.
+
+What it still cannot do: see your screen or your email.
 
 ## Try saying
 - "Who is the prime minister of India?"
