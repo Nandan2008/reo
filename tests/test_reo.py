@@ -228,8 +228,9 @@ class Recording(unittest.TestCase):
         started = time.monotonic()
 
         class FakeStream:
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
             def read(self, n):
                 time.sleep(0.01)
                 return block, None
@@ -1042,8 +1043,9 @@ class MicrophoneFailures(unittest.TestCase):
 
         class Stream:
             def __init__(self): self.left = list(blocks)
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
             def read(self, n):
                 if not self.left:
                     raise sd.PortAudioError("Stream is stopped", -9983)
@@ -1054,6 +1056,43 @@ class MicrophoneFailures(unittest.TestCase):
             audio = listener._record()
         self.assertIsNotNone(audio)          # not thrown away
         self.assertEqual(len(audio), 160 * 8)
+
+    def test_a_dying_close_does_not_escape(self):
+        """Handling the failed read was not enough: stopping a stream the
+        device already dropped raises again, and that killed the process."""
+        import sounddevice as sd
+
+        class Stream:
+            def __init__(self): self.left = 4
+            def start(self): pass
+            def stop(self): raise sd.PortAudioError("Stream is stopped", -9983)
+            def close(self): raise sd.PortAudioError("Stream is stopped", -9983)
+            def read(self, n):
+                if self.left <= 0:
+                    raise sd.PortAudioError("Stream is stopped", -9983)
+                self.left -= 1
+                return np.full((160, 1), 0.3, dtype=np.float32), False
+
+        listener = self._listener()
+        with mock.patch.object(sd, "InputStream", lambda **kw: Stream()):
+            audio = listener._record()      # must not raise
+        self.assertEqual(len(audio), 160 * 4)
+
+    def test_giving_up_on_silence_still_closes_the_stream(self):
+        import sounddevice as sd
+        closed = []
+
+        class Stream:
+            def start(self): pass
+            def stop(self): closed.append("stop")
+            def close(self): closed.append("close")
+            def read(self, n):
+                return np.zeros((160, 1), dtype=np.float32), False
+
+        listener = self._listener()
+        with mock.patch.object(sd, "InputStream", lambda **kw: Stream()),              mock.patch.object(config, "WAIT_FOR_SPEECH_SECONDS", 0.2):
+            self.assertIsNone(listener._record())
+        self.assertEqual(closed, ["stop", "close"])
 
     def test_a_microphone_that_will_not_open_returns_nothing(self):
         import sounddevice as sd

@@ -13,6 +13,23 @@ BLOCK_SECONDS = 0.1
 LANGUAGE_CONFIDENCE = 0.75
 
 
+def _shut(stream) -> None:
+    """Close a stream without caring whether it is still alive.
+
+    Handling the failed read was not enough: `with sd.InputStream(...)` stops
+    and closes on the way out, and stopping a stream the device has already
+    dropped raises "Stream is stopped" a second time. That one escaped and
+    still ended the process, after the first had been caught and reported.
+    """
+    for shut in (getattr(stream, "stop", None), getattr(stream, "close", None)):
+        if shut is None:
+            continue
+        try:
+            shut()
+        except Exception:
+            pass
+
+
 class Listener:
     def __init__(self):
         print("Loading speech model (first run downloads it)...")
@@ -45,17 +62,18 @@ class Listener:
         wait_blocks = int(config.WAIT_FOR_SPEECH_SECONDS / BLOCK_SECONDS)
         silence_blocks = int(config.SILENCE_SECONDS / BLOCK_SECONDS)
 
-        frames, heard, silent, asked_to_stop = [], False, 0, False
+        frames, heard, silent, asked_to_stop, nothing_said = [], False, 0, False, False
         try:
-            stream_context = sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1,
-                                            dtype="float32", blocksize=block)
+            stream = sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1,
+                                    dtype="float32", blocksize=block)
+            stream.start()
         except sd.PortAudioError as e:
             # No microphone, or something else holds it. Saying so and carrying
             # on beats taking the whole assistant down with us.
             print(f"  [listen] cannot open the microphone: {e}")
             return None
 
-        with stream_context as stream:
+        try:
             for i in range(max_blocks):
                 if stop_now is not None and stop_now():
                     asked_to_stop = True
@@ -65,8 +83,6 @@ class Listener:
                 except sd.PortAudioError as e:
                     # The device can go away mid-sentence: unplugged, grabbed by
                     # another program, or the laptop coming back from sleep.
-                    # This used to end the process - "Stream is stopped" killed
-                    # reo outright in the middle of a conversation.
                     print(f"  [listen] the microphone stopped mid-recording ({e})")
                     asked_to_stop = True
                     break
@@ -79,12 +95,15 @@ class Listener:
                     if silent >= silence_blocks:
                         break
                 elif i >= wait_blocks:
-                    return None
+                    nothing_said = True
+                    break
             else:
                 if heard:
                     print(f"  (stopped at the {config.MAX_RECORD_SECONDS} second limit)")
+        finally:
+            _shut(stream)
 
-        if not frames:
+        if nothing_said or not frames:
             return None
         # When they pressed the key to stop, transcribe what was captured even if
         # it never crossed the loudness threshold. A quiet microphone kept "heard"
