@@ -46,13 +46,30 @@ class Listener:
         silence_blocks = int(config.SILENCE_SECONDS / BLOCK_SECONDS)
 
         frames, heard, silent, asked_to_stop = [], False, 0, False
-        with sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1,
-                            dtype="float32", blocksize=block) as stream:
+        try:
+            stream_context = sd.InputStream(samplerate=config.SAMPLE_RATE, channels=1,
+                                            dtype="float32", blocksize=block)
+        except sd.PortAudioError as e:
+            # No microphone, or something else holds it. Saying so and carrying
+            # on beats taking the whole assistant down with us.
+            print(f"  [listen] cannot open the microphone: {e}")
+            return None
+
+        with stream_context as stream:
             for i in range(max_blocks):
                 if stop_now is not None and stop_now():
                     asked_to_stop = True
                     break
-                data, _ = stream.read(block)
+                try:
+                    data, _ = stream.read(block)
+                except sd.PortAudioError as e:
+                    # The device can go away mid-sentence: unplugged, grabbed by
+                    # another program, or the laptop coming back from sleep.
+                    # This used to end the process - "Stream is stopped" killed
+                    # reo outright in the middle of a conversation.
+                    print(f"  [listen] the microphone stopped mid-recording ({e})")
+                    asked_to_stop = True
+                    break
                 frames.append(data.copy())
                 loud = float(np.sqrt(np.mean(data ** 2))) > config.SILENCE_THRESHOLD
                 if loud:

@@ -242,6 +242,13 @@ def _loop(listener, brain, waker, toggle, combination, ui):
                 text = listener.listen()
         except (KeyboardInterrupt, EOFError):
             break
+        except Exception as e:
+            # A microphone that disappears, a driver that hiccups: say so and
+            # go round again. Nothing here is worth ending the session over.
+            print(f"  [error] could not listen: {type(e).__name__}: {e}")
+            if ui:
+                ui.line("note", "the microphone failed; press the key and try again")
+            text = ""
 
         if not is_speech(text):
             print("(didn't catch that)")

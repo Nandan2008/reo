@@ -1021,5 +1021,49 @@ class InventedTools(unittest.TestCase):
         self.assertEqual(len(brain.history), 3)
 
 
+class MicrophoneFailures(unittest.TestCase):
+    """A microphone that goes away mid-sentence used to end the session.
+
+    sounddevice raised PortAudioError("Stream is stopped") out of
+    stream.read(), it reached the top of the loop, and reo exited in the
+    middle of a conversation.
+    """
+
+    def _listener(self):
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", False
+        listener.transcribe_seconds = 0.0
+        return listener
+
+    def test_a_stream_that_dies_keeps_what_it_heard(self):
+        import sounddevice as sd
+        blocks = [np.full((160, 1), 0.3, dtype=np.float32)] * 8
+
+        class Stream:
+            def __init__(self): self.left = list(blocks)
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, n):
+                if not self.left:
+                    raise sd.PortAudioError("Stream is stopped", -9983)
+                return self.left.pop(0), False
+
+        listener = self._listener()
+        with mock.patch.object(sd, "InputStream", lambda **kw: Stream()):
+            audio = listener._record()
+        self.assertIsNotNone(audio)          # not thrown away
+        self.assertEqual(len(audio), 160 * 8)
+
+    def test_a_microphone_that_will_not_open_returns_nothing(self):
+        import sounddevice as sd
+
+        def refuse(**kwargs):
+            raise sd.PortAudioError("Invalid device", -9996)
+
+        listener = self._listener()
+        with mock.patch.object(sd, "InputStream", refuse):
+            self.assertIsNone(listener._record())   # and does not raise
+
+
 if __name__ == "__main__":
     unittest.main()
