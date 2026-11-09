@@ -24,7 +24,7 @@ BEAM_SIZE = int(os.getenv("REO_BEAM", "5"))
 VOCABULARY = os.getenv(
     "REO_VOCABULARY",
     "Reo, Claude, Hyderabad, Telangana, Telugu, Nandan, Chrome, Brave, "
-    "Spotify, WhatsApp, YouTube, Notepad, VS Code").strip()
+    "Spotify, WhatsApp, YouTube, Notepad, VS Code, MrBeast").strip()
 # Languages worth considering when none is pinned. Left to pick from all 99,
 # Whisper read this accent as Russian and Spanish and produced nonsense.
 LANGUAGES = [c.strip().lower() for c in

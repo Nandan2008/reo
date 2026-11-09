@@ -30,6 +30,11 @@ SYSTEM = (
     "knowing next time; do not announce that you did."
 )
 
+# Every tool reo can actually run. A name outside this set must never enter
+# the history: the server checks past tool_calls against the tools sent with
+# each new request.
+KNOWN_TOOLS = {t["name"] for t in TOOLS}
+
 # Convert our tool specs to the OpenAI-compatible format
 OPENAI_TOOLS = [
     {"type": "function",
@@ -56,9 +61,7 @@ class Brain:
         return self._clients[index]
 
     def _ask(self, provider, client, with_tools: bool):
-        """One API call. gpt-oss sometimes reaches for a built-in tool we do not
-        expose (notably 'refuse' when declining), which the server rejects with a
-        400. Answering without tools lets it say its piece instead of crashing."""
+        """One API call."""
         today = datetime.now().strftime("%A, %d %B %Y")
         # Facts about this user travel with every request, so reo knows them
         # rather than having to go and ask. Capped in memory.py: this is resent
@@ -82,14 +85,35 @@ class Brain:
         try:
             response = client.chat.completions.create(**kwargs)
         except BadRequestError as e:
-            if with_tools and "was not in request.tools" in str(e):
-                print("  [brain] model reached for an unavailable tool; answering without tools")
-                return self._ask(provider, client, with_tools=False)
+            # A history that already holds a call to a tool we do not offer.
+            # Answering without tools does NOT help: the call is still in the
+            # messages, and the server rejects that with "Tool choice is none,
+            # but model called a tool". Take the call out and ask again.
+            if "was not in request.tools" in str(e) and self._forget_invented_calls():
+                print("  [brain] dropped a call to a tool reo does not have; asking again")
+                return self._ask(provider, client, with_tools)
             raise
         usage = getattr(response, "usage", None)
         session.add_request(getattr(usage, "total_tokens", 0) if usage else 0)
         providers.remember(provider)
         return response
+
+    def _forget_invented_calls(self) -> bool:
+        """Strip history turns that call a tool reo does not have, along with
+        the results paired with them. Returns whether anything was removed, so
+        the caller knows whether asking again could possibly help."""
+        doomed = set()
+        for message in self.history:
+            calls = message.get("tool_calls") or []
+            if any(c["function"]["name"] not in KNOWN_TOOLS for c in calls):
+                doomed.add(id(message))
+                answered = {c["id"] for c in calls}
+                doomed.update(id(m) for m in self.history
+                              if m.get("tool_call_id") in answered)
+        if not doomed:
+            return False
+        self.history = [m for m in self.history if id(m) not in doomed]
+        return True
 
     def _complete(self, with_tools: bool):
         """Ask whoever will answer.
@@ -135,17 +159,39 @@ class Brain:
                     self.history.append({"role": "assistant", "content": reply})
                     return reply
 
+                # A call to a tool reo does not have must never reach the
+                # history. Groq validates past tool_calls against the tools
+                # sent with every later request, so one invented name turns
+                # every following question into a 400 - and the retry without
+                # tools is rejected too, because the call is still in there.
+                # That is what "Something went wrong reaching my brain" was.
+                runnable = [tc for tc in msg.tool_calls if tc.function.name in KNOWN_TOOLS]
+                invented = sorted({tc.function.name for tc in msg.tool_calls
+                                   if tc.function.name not in KNOWN_TOOLS})
+                if invented:
+                    print(f"  [brain] no such tool: {', '.join(invented)}; not recording it")
+                if not runnable:
+                    spoken = (msg.content or "").strip()
+                    if spoken:
+                        self.history.append({"role": "assistant", "content": spoken})
+                        return spoken
+                    self.history.append({
+                        "role": "user",
+                        "content": "That tool does not exist. Use one you were given, "
+                                   "or just answer."})
+                    continue
+
                 self.history.append({
                     "role": "assistant",
                     "content": msg.content or "",
                     "tool_calls": [
                         {"id": tc.id, "type": "function",
                          "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                        for tc in msg.tool_calls
+                        for tc in runnable
                     ],
                 })
-                session.add_tools(len(msg.tool_calls))
-                for tc in msg.tool_calls:
+                session.add_tools(len(runnable))
+                for tc in runnable:
                     try:
                         args = json.loads(tc.function.arguments or "{}")
                     except json.JSONDecodeError:

@@ -18,7 +18,7 @@ from reo.audio import looks_hallucinated
 from reo.audio import normalize as normalize_gain
 from reo.__main__ import EXIT_PHRASES
 from reo.text import is_speech, normalize
-from reo.brain import SYSTEM, Brain
+from reo.brain import KNOWN_TOOLS, SYSTEM, Brain
 from reo.listen import Listener
 from reo.speak import VOICE_SETTINGS, split_emotion
 
@@ -923,6 +923,102 @@ class ToolTable(unittest.TestCase):
         for spec in tools.TOOLS:
             with self.subTest(tool=spec["name"]):
                 self.assertTrue(spec.get("description", "").strip())
+
+
+class InventedTools(unittest.TestCase):
+    """One invented tool name used to break every question that followed.
+
+    Groq checks the tool_calls in the history against the tools sent with the
+    new request, so a recorded call to a tool reo does not have turns into a
+    400 forever after - and the retry without tools is rejected too, because
+    the call is still in the messages.
+    """
+
+    @staticmethod
+    def _call(name, id="c1"):
+        return SimpleNamespace(id=id, function=SimpleNamespace(name=name, arguments="{}"))
+
+    def _brain(self, turns):
+        """turns: a list of (tool_calls, content) the model will answer with."""
+        brain = Brain.__new__(Brain)
+        brain.history = []
+        brain.pool = providers.Pool([providers.Provider("p", "k", "https://p.invalid", "m")])
+        brain._clients = {}
+        replies = iter(turns)
+
+        def complete(with_tools):
+            calls, content = next(replies)
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(tool_calls=calls, content=content),
+                finish_reason="stop")])
+
+        brain._complete = complete
+        return brain
+
+    def test_an_invented_call_is_not_recorded(self):
+        brain = self._brain([([self._call("browser")], "Let me look."),
+                             (None, "[neutral] Here you go.")])
+        brain.think("close it for me")
+        for message in brain.history:
+            for call in message.get("tool_calls") or []:
+                self.assertIn(call["function"]["name"], KNOWN_TOOLS)
+
+    def test_a_real_call_alongside_an_invented_one_still_runs(self):
+        brain = self._brain([
+            ([self._call("get_datetime", "a"), self._call("browser", "b")], ""),
+            (None, "[neutral] Done."),
+        ])
+        brain.think("what time is it")
+        recorded = [c["function"]["name"] for m in brain.history
+                    for c in (m.get("tool_calls") or [])]
+        self.assertEqual(recorded, ["get_datetime"])
+
+    def test_words_alongside_an_invented_call_become_the_answer(self):
+        brain = self._brain([([self._call("browser")], "[neutral] I cannot do that.")])
+        self.assertEqual(brain.think("close it"), "[neutral] I cannot do that.")
+
+    def test_a_silent_invented_call_asks_the_model_again(self):
+        brain = self._brain([([self._call("browser")], ""),
+                             (None, "[neutral] Closed it.")])
+        self.assertEqual(brain.think("close it"), "[neutral] Closed it.")
+
+    def test_every_tool_call_keeps_its_result(self):
+        brain = self._brain([
+            ([self._call("get_datetime", "a"), self._call("browser", "b")], ""),
+            (None, "[neutral] Done."),
+        ])
+        brain.think("what time is it")
+        for i, message in enumerate(brain.history):
+            for call in message.get("tool_calls") or []:
+                later = [m.get("tool_call_id") for m in brain.history[i + 1:]]
+                self.assertIn(call["id"], later)
+
+    def test_a_poisoned_history_can_be_cleaned_up(self):
+        """Belt and braces for a history that got one in anyway."""
+        brain = Brain.__new__(Brain)
+        brain.history = [
+            {"role": "user", "content": "close it"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "x", "type": "function",
+                 "function": {"name": "browser", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "x", "content": "Unknown tool browser."},
+            {"role": "assistant", "content": "done"},
+        ]
+        self.assertTrue(brain._forget_invented_calls())
+        self.assertEqual([m["role"] for m in brain.history], ["user", "assistant"])
+        self.assertFalse(brain._forget_invented_calls())   # nothing left to drop
+
+    def test_a_clean_history_is_left_alone(self):
+        brain = Brain.__new__(Brain)
+        brain.history = [
+            {"role": "user", "content": "what time is it"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "x", "type": "function",
+                 "function": {"name": "get_datetime", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "x", "content": "now"},
+        ]
+        self.assertFalse(brain._forget_invented_calls())
+        self.assertEqual(len(brain.history), 3)
 
 
 if __name__ == "__main__":
