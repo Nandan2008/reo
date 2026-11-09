@@ -49,7 +49,8 @@ But openWakeWord only ships models for `hey_jarvis`, `alexa`, `hey_mycroft` and
 | --- | --- | --- |
 | Hotkey | Ctrl+Alt+R. No wake word at all. | yes, reliably |
 | A pretrained phrase | `REO_WAKE_PHRASE=hey_jarvis` | yes, but it is not its name |
-| A model trained on "reo" | `REO_WAKE_PHRASE=C:\patheo.onnx` | once you train one |
+| A model trained on "reo" | `REO_WAKE_PHRASE=C:\path
+eo.onnx` | once you train one |
 
 The third is the real answer. openWakeWord's training notebook generates synthetic
 examples of a phrase and trains a model on a free Colab GPU; it hands back a `.onnx`
@@ -73,9 +74,14 @@ Startup folder - nothing is installed into Windows itself.
 ## Languages
 
 Speak to it in any of the ~99 languages Whisper knows and it answers in the same
-one. Nothing to configure - the language is detected each time. Pin it with
-`REO_LANGUAGE=hi` (or `en`, `te`, `es` ...) if you only ever use one, which is
-slightly faster and more accurate.
+one. Nothing to configure: reo works the language out from the first thing it
+hears and then reuses it. That matters for speed - on a 3.2 second clip,
+recognition takes 2.2s with the language known and 4.5s without, so detecting
+it every time was costing more than the recognition itself. If a recording
+comes back empty the guess is dropped, so changing language still works.
+
+Pin it with `REO_LANGUAGE=hi` (or `en`, `te`, `es` ...) to skip even the first
+detection.
 
 The voice is the limit, not the understanding: Windows only has English voices
 installed here, so a Hindi reply is spoken by an English voice. Adding a language
@@ -102,15 +108,25 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-Fifteen tests, no microphone or API key needed. They cover the things that broke
-during setup: exit phrases with punctuation inside them, noise transcriptions,
-emotion tags, tool failures, and history trimming keeping tool calls paired.
+Eighty-six tests, no microphone or API key needed. They cover the things that
+actually broke: exit phrases with punctuation inside them, noise transcriptions,
+emotion tags and repeated answers, tool failures, history trimming keeping tool
+calls paired, contractions reaching the fast path, sticky language detection,
+and falling over to a second API key.
 
 ## The window
 
-reo opens a window showing a reactor that turns faster and changes colour as it
-listens, thinks and speaks, with the conversation underneath. `REO_UI=0` in `.env`
-runs it in the console alone.
+reo opens a JARVIS-style dial: graduated rings, bearing brackets and calipers
+that turn faster and change colour as it listens, thinks and speaks, with the
+conversation and a panel of counters beside it. `REO_UI=0` in `.env` runs it in
+the console alone.
+
+It is drawn as one SVG. Every ring carries `pathLength="360"`, which makes
+`stroke-dasharray` read in degrees, so `"0.5 2.5"` is 120 tick marks at any
+radius and any window size. Nothing blurred or shadowed is animated: that was
+the old reactor's real cost, a 34px blur and two large box-shadows being
+re-rasterised every frame because the elements carrying them were scaling.
+Only `transform` moves, which the compositor handles without repainting.
 
 ## Running things on the machine
 
@@ -166,9 +182,13 @@ screen or email.
 - Reo doesn't hear you: lower REO_SILENCE_THRESHOLD in .env (e.g. 0.005).
 - It cuts you off or never stops listening: raise it (e.g. 0.02).
 - Wrong mic: set your default input device in Windows Sound settings.
-- "Rate limit" errors: you hit the free tier's per-minute limit. Wait a minute, or switch LLM_MODEL to a smaller model.
+- "Rate limit" errors: the free tier allows 8000 tokens a minute, which one
+  tool-heavy question can spend by itself. Add a second key - LLAMA_API_KEY,
+  OPENROUTER_API_KEY or GEMINI_API_KEY in `.env`, or run `set-key.ps1` - and reo
+  benches the spent one for a minute and asks the next instead. The window's
+  KEYS row shows how many are live.
 - "Model does not exist" errors: Groq retires models. Pick a current chat model from
   https://console.groq.com/docs/models and set LLM_MODEL in .env.
 - Reo mishears words: set REO_WHISPER_MODEL=small in .env (more accurate, slower).
-- Only ever speaking English? Set REO_LANGUAGE=en to skip detection and sharpen it.
+- Only ever speaking English? Set REO_LANGUAGE=en to skip even the first detection.
 - To switch providers (Gemini, OpenRouter, local Ollama), change LLM_BASE_URL / LLM_MODEL in .env. No code changes needed.
