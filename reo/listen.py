@@ -80,11 +80,14 @@ class Listener:
         audio = self._record(stop_now)
         if audio is None:
             return ""
+        clean = au.normalize(audio)
 
         started = time.time()
-        segments, info = self.model.transcribe(
-            au.normalize(audio), language=self.language, beam_size=1,
-            vad_filter=True, **au.CAREFUL)
+        if self.language is None:
+            self._choose_language(clean)
+        segments, _ = self.model.transcribe(
+            clean, language=self.language, beam_size=config.BEAM_SIZE,
+            hotwords=config.VOCABULARY or None, vad_filter=True, **au.CAREFUL)
         text = " ".join(s.text for s in segments).strip()
         self.transcribe_seconds = time.time() - started
 
@@ -95,20 +98,29 @@ class Listener:
             # been the wrong guess, so let the next utterance decide again.
             self._forget_language()
             return ""
-
-        self._remember_language(info)
         return text
 
-    def _remember_language(self, info) -> None:
-        """Keep a confident detection and stop paying for it every time."""
-        if self.language is not None:
+    def _choose_language(self, audio) -> None:
+        """Work out the language once, choosing only among the ones spoken here.
+
+        Left to choose freely, Whisper read this accent as Russian and Spanish
+        and wrote confident nonsense. Ranking only the configured languages
+        cannot produce a language the user does not speak.
+        """
+        try:
+            _, _, every = self.model.detect_language(audio, vad_filter=True)
+        except Exception as e:
+            print(f"  [listen] could not detect the language ({e}); assuming English")
+            self.language, self.detected = "en", True
             return
-        language = getattr(info, "language", None)
-        confidence = getattr(info, "language_probability", 0.0) or 0.0
-        if language and confidence >= LANGUAGE_CONFIDENCE:
-            self.language, self.detected = language, True
-            print(f"  [listen] language is {language} ({confidence:.0%}); "
-                  f"reusing it, which saves about a second per question")
+        allowed = set(config.LANGUAGES)
+        ranked = sorted(((p, code) for code, p in every if code in allowed), reverse=True)
+        if not ranked:
+            return      # nothing configured matched; let whisper decide this once
+        confidence, best = ranked[0]
+        if confidence >= LANGUAGE_CONFIDENCE:
+            self.language, self.detected = best, True
+            print(f"  [listen] language is {best} ({confidence:.0%}); reusing it")
 
     def _forget_language(self) -> None:
         if self.detected:

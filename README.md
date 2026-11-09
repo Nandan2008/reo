@@ -83,6 +83,32 @@ comes back empty the guess is dropped, so changing language still works.
 Pin it with `REO_LANGUAGE=hi` (or `en`, `te`, `es` ...) to skip even the first
 detection.
 
+Detection only ever chooses from `REO_LANGUAGES` (`en,te,hi` by default). Left
+to choose from all ninety-nine, Whisper read an Indian accent as Russian and
+Spanish and wrote fluent nonsense - "Благодарю!" for a question asked in
+English. It cannot now answer in a language you do not speak.
+
+## Hearing you properly
+
+Accents are where Whisper struggles, and proper nouns are most of what it gets
+wrong. "Hyderabad" came back as "Bunt", then "Abad", then "chydra bad"; "Claude"
+as "cloth", "claw" and "CLA UDE"; "Reo" as "Real".
+
+Two settings fix most of it. `REO_VOCABULARY` is a list of names it should
+expect - it cannot spell a word it has never been told, and this costs nothing
+measurable. `REO_WHISPER_MODEL=small` hears an accent better than `base` at
+about three times the cost, which on a short question is around a second.
+
+To choose for yourself rather than take my word for it:
+
+```
+.venv\Scripts\python.exe diagnose.py
+```
+
+It records six seconds of you, then prints what `tiny`, `base` and `small` each
+heard, with and without the vocabulary hint, and how long each took. Pick the
+smallest model that gets your words right and put it in `.env`.
+
 The voice is the limit, not the understanding: Windows only has English voices
 installed here, so a Hindi reply is spoken by an English voice. Adding a language
 pack in Windows Settings gives it a real one, and `REO_VOICE` picks it.

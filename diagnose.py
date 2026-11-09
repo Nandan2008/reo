@@ -70,6 +70,7 @@ def verdict(levels):
 
 
 def transcribe(audio):
+    import time
     import wave
     from faster_whisper import WhisperModel
 
@@ -83,18 +84,37 @@ def transcribe(audio):
         w.writeframes((gained * 32767).astype(np.int16).tobytes())
     print("saved diagnose.wav so you can play back what the mic actually got")
 
-    for name in (config.WAKE_MODEL, config.WHISPER_MODEL):
-        model = WhisperModel(name, device="cpu", compute_type="int8")
-        for label, clip, vad in [("raw   + vad", audio, True),
-                                 ("raw   - vad", audio, False),
-                                 ("gained+ vad", gained, True),
-                                 ("gained- vad", gained, False)]:
-            segments, _ = model.transcribe(clip, language="en", beam_size=1, vad_filter=vad)
+    print("
+What each model hears, and how long it takes. Pick the smallest one")
+    print("that gets your words right, and put it in .env as REO_WHISPER_MODEL.
+")
+    print(f"  vocabulary hint: {config.VOCABULARY or '(none)'}
+")
+
+    seen = []
+    for name in dict.fromkeys(["tiny", "base", "small", config.WHISPER_MODEL]):
+        try:
+            model = WhisperModel(name, device="cpu", compute_type="int8")
+        except Exception as e:
+            print(f"  {name:9} unavailable: {str(e)[:60]}")
+            continue
+        for label, hints in [("plain ", None), ("+vocab", config.VOCABULARY or None)]:
+            started = time.time()
+            segments, _ = model.transcribe(gained, language="en",
+                                           beam_size=config.BEAM_SIZE,
+                                           hotwords=hints, vad_filter=True)
             text = " ".join(s.text for s in segments).strip()
-            words = set(normalize(text).split())
-            hit = words & config.WAKE_WORDS
-            flag = "WAKE" if hit else "    "
-            print(f"  {name:9} {label}  {flag}  {text[:70]!r}")
+            took = time.time() - started
+            hit = "WAKE" if set(normalize(text).split()) & config.WAKE_WORDS else "    "
+            print(f"  {name:9} {label}  {took:5.2f}s  {hit}  {text[:64]!r}")
+            seen.append((name, label.strip(), text))
+        print()
+
+    if len({t for _, _, t in seen}) == 1:
+        print("Every model heard the same thing, so the recording is clear.")
+    else:
+        print("They disagree, so the accent or the microphone is the limit here,")
+        print("not the model alone. Add the words it got wrong to REO_VOCABULARY.")
 
 
 if __name__ == "__main__":

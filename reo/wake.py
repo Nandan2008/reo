@@ -43,8 +43,12 @@ class WakeListener:
         clip = au.normalize(raw)
         secs = len(raw) / config.SAMPLE_RATE
 
-        segments, _ = self.model.transcribe(clip, language=config.LANGUAGE, beam_size=1,
-                                            vad_filter=True, **au.CAREFUL)
+        # A pinned language, always: this runs on every chunk of room noise,
+        # and detection costs more than the recognition it precedes. Hotwords
+        # tell it the name it is straining to hear.
+        segments, _ = self.model.transcribe(
+            clip, language=config.LANGUAGE or config.LANGUAGES[0], beam_size=1,
+            hotwords=config.VOCABULARY or None, vad_filter=True, **au.CAREFUL)
         text = " ".join(s.text for s in segments).strip()
 
         if not text:

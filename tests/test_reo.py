@@ -5,11 +5,10 @@ import tempfile
 import unittest
 import urllib.parse
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
-
-from types import SimpleNamespace
-
 from openai import APIStatusError, RateLimitError
 
 from reo import config, fastpath, providers, tools
@@ -628,39 +627,62 @@ class KeyFailover(unittest.TestCase):
 
 class StickyLanguage(unittest.TestCase):
     """Detecting the language costs about as much as the transcription, so it
-    is worth doing once rather than on every question."""
+    is worth doing once - and only among the languages actually spoken here."""
 
     @staticmethod
-    def _listener(pinned=None):
+    def _listener(pinned=None, probs=None, blow_up=False):
         listener = Listener.__new__(Listener)       # no model, no microphone
         listener.language, listener.detected = pinned, False
         listener.transcribe_seconds = 0.0
+
+        def detect_language(audio, vad_filter=False):
+            if blow_up:
+                raise RuntimeError("no features")
+            ranked = sorted(probs.items(), key=lambda kv: -kv[1])
+            return ranked[0][0], ranked[0][1], list(probs.items())
+
+        listener.model = SimpleNamespace(detect_language=detect_language)
         return listener
 
-    @staticmethod
-    def _info(language, probability):
-        return SimpleNamespace(language=language, language_probability=probability)
-
     def test_a_confident_detection_is_kept(self):
-        listener = self._listener()
-        listener._remember_language(self._info("en", 0.97))
+        listener = self._listener(probs={"en": 0.97, "te": 0.02})
+        listener._choose_language(None)
         self.assertEqual(listener.language, "en")
         self.assertTrue(listener.detected)
 
     def test_a_shaky_detection_is_not_kept(self):
-        listener = self._listener()
-        listener._remember_language(self._info("cy", 0.41))
+        listener = self._listener(probs={"en": 0.41, "hi": 0.30})
+        listener._choose_language(None)
         self.assertIsNone(listener.language)
 
-    def test_a_pinned_language_is_never_overwritten(self):
-        listener = self._listener(pinned="te")
-        listener._remember_language(self._info("en", 0.99))
+    def test_only_the_configured_languages_can_win(self):
+        """Whisper read this accent as Russian and wrote confident nonsense."""
+        listener = self._listener(probs={"ru": 0.80, "en": 0.90, "cy": 0.70})
+        with mock.patch.object(config, "LANGUAGES", ["en", "te", "hi"]):
+            listener._choose_language(None)
+        self.assertEqual(listener.language, "en")
+
+    def test_a_language_outside_the_list_is_ignored_even_when_it_leads(self):
+        listener = self._listener(probs={"ru": 0.99, "te": 0.88})
+        with mock.patch.object(config, "LANGUAGES", ["en", "te", "hi"]):
+            listener._choose_language(None)
         self.assertEqual(listener.language, "te")
+
+    def test_nothing_configured_matching_leaves_it_undecided(self):
+        listener = self._listener(probs={"ru": 0.99})
+        with mock.patch.object(config, "LANGUAGES", ["en"]):
+            listener._choose_language(None)
+        self.assertIsNone(listener.language)
+
+    def test_a_detection_failure_falls_back_to_english(self):
+        listener = self._listener(blow_up=True)
+        listener._choose_language(None)
+        self.assertEqual(listener.language, "en")
 
     def test_a_guess_is_dropped_when_nothing_comes_back(self):
         """Silence after a guess may mean the guess was wrong, so try again."""
-        listener = self._listener()
-        listener._remember_language(self._info("en", 0.99))
+        listener = self._listener(probs={"en": 0.99})
+        listener._choose_language(None)
         listener._forget_language()
         self.assertIsNone(listener.language)
         self.assertFalse(listener.detected)
@@ -669,6 +691,23 @@ class StickyLanguage(unittest.TestCase):
         listener = self._listener(pinned="en")
         listener._forget_language()
         self.assertEqual(listener.language, "en")
+
+
+class Vocabulary(unittest.TestCase):
+    """Proper nouns are most of what it gets wrong, and it cannot spell a name
+    it has never been told: Hyderabad came back as "Bunt" and "chydra bad"."""
+
+    def test_the_names_it_kept_missing_are_in_the_hint(self):
+        words = config.VOCABULARY.lower()
+        for name in ["reo", "claude", "hyderabad", "telugu"]:
+            with self.subTest(name=name):
+                self.assertIn(name, words)
+
+    def test_english_is_considered_first(self):
+        self.assertEqual(config.LANGUAGES[0], "en")
+
+    def test_a_wider_beam_than_one(self):
+        self.assertGreater(config.BEAM_SIZE, 1)
 
 
 class ReasoningEffort(unittest.TestCase):

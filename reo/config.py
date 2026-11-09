@@ -11,7 +11,23 @@ REQUEST_TIMEOUT = float(os.getenv("REO_REQUEST_TIMEOUT", "25"))
 # How hard a reasoning model should think before a one-sentence answer.
 # "low", "medium", "high", or blank to leave it to the model.
 REASONING_EFFORT = os.getenv("REO_REASONING", "low").strip()
-WHISPER_MODEL = os.getenv("REO_WHISPER_MODEL", "base")
+# "small" hears an Indian accent far better than "base", which was turning
+# Hyderabad into "Bunt", "Abad" and "chydra bad" on three tries in a row. It
+# costs about a second more per question: tiny < base < small < medium.
+WHISPER_MODEL = os.getenv("REO_WHISPER_MODEL", "small")
+# Wider search through the possible transcriptions. Measured at +0.06s, which
+# is as close to free as accuracy gets.
+BEAM_SIZE = int(os.getenv("REO_BEAM", "5"))
+# Names Whisper will not guess but you say often. Proper nouns are most of
+# what it gets wrong, and it cannot spell what it has never been told.
+VOCABULARY = os.getenv(
+    "REO_VOCABULARY",
+    "Reo, Claude, Hyderabad, Telangana, Telugu, Nandan, Chrome, Brave, "
+    "Spotify, WhatsApp, YouTube, Notepad, VS Code").strip()
+# Languages worth considering when none is pinned. Left to pick from all 99,
+# Whisper read this accent as Russian and Spanish and produced nonsense.
+LANGUAGES = [c.strip().lower() for c in
+             os.getenv("REO_LANGUAGES", "en,te,hi").split(",") if c.strip()]
 # Blank means reo works the language out from the first thing it hears and
 # then reuses it. Detection costs about as much as the transcription itself,
 # so setting "en", "hi", "te" ... skips even that first time.
