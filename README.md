@@ -94,10 +94,15 @@ Accents are where Whisper struggles, and proper nouns are most of what it gets
 wrong. "Hyderabad" came back as "Bunt", then "Abad", then "chydra bad"; "Claude"
 as "cloth", "claw" and "CLA UDE"; "Reo" as "Real".
 
-Two settings fix most of it. `REO_VOCABULARY` is a list of names it should
-expect - it cannot spell a word it has never been told, and this costs nothing
-measurable. `REO_WHISPER_MODEL=small` hears an accent better than `base` at
-about three times the cost, which on a short question is around a second.
+The fix that works is `REO_VOCABULARY`: a list of names it should expect. It
+cannot spell a word it has never been told, and telling it costs nothing
+measurable. `REO_BEAM=5` widens the search for about 0.2s.
+
+A bigger model is the obvious other answer and it did not survive measurement.
+`small` hears an accent better, but on this laptop it takes about 7s against
+`base`'s 2.3s on the same clip, and neither thread count nor `int8_float32`
+moved it. Seven seconds is slower than the problem it solves, so `base` stays.
+Set `REO_WHISPER_MODEL=small` if you would rather wait than repeat yourself.
 
 To choose for yourself rather than take my word for it:
 

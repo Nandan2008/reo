@@ -11,10 +11,11 @@ REQUEST_TIMEOUT = float(os.getenv("REO_REQUEST_TIMEOUT", "25"))
 # How hard a reasoning model should think before a one-sentence answer.
 # "low", "medium", "high", or blank to leave it to the model.
 REASONING_EFFORT = os.getenv("REO_REASONING", "low").strip()
-# "small" hears an Indian accent far better than "base", which was turning
-# Hyderabad into "Bunt", "Abad" and "chydra bad" on three tries in a row. It
-# costs about a second more per question: tiny < base < small < medium.
-WHISPER_MODEL = os.getenv("REO_WHISPER_MODEL", "small")
+# "small" hears an accent better, and on this machine takes about 7s against
+# base's 2.3s on the same clip - measured across thread counts and both int8
+# modes, none of which moved it. That is slower than the problem it fixes, so
+# base stays and the vocabulary hint below does the work instead.
+WHISPER_MODEL = os.getenv("REO_WHISPER_MODEL", "base")
 # Wider search through the possible transcriptions. Measured at +0.06s, which
 # is as close to free as accuracy gets.
 BEAM_SIZE = int(os.getenv("REO_BEAM", "5"))
