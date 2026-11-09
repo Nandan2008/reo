@@ -11,7 +11,7 @@
     --text: #c6dcee;
     --muted: #51687d;
     --edge: #16293a;
-    /* One number drives every ring: the state sets it, each ring multiplies it. */
+    /* One number drives the whole projection: the state sets it. */
     --beat: 1;
   }
 
@@ -23,7 +23,7 @@
     font: 13px/1.5 Consolas, "Cascadia Mono", monospace;
     height: 100vh;
     overflow: hidden;
-    background-image: radial-gradient(ellipse at 30% 50%, #091420 0%, var(--bg) 64%);
+    background-image: radial-gradient(ellipse at 30% 58%, #091722 0%, var(--bg) 62%);
   }
 
   .frame { position: fixed; inset: 18px; pointer-events: none; }
@@ -49,53 +49,34 @@
     display: grid; grid-template-columns: minmax(360px, 34%) 1fr 212px; gap: 34px;
   }
 
-  /* ---- the instrument -------------------------------------------------
-     Rings are SVG strokes, not stacked divs. Every circle carries
-     pathLength="360", which makes stroke-dasharray read in degrees: "1 2"
-     is 120 ticks whatever the radius, so the geometry needs no arithmetic
-     and stays crisp at any window size.
+  /* ---- the projection -------------------------------------------------
+     Not a wireframe. The reference is a ball of thousands of light streaks -
+     city lights wrapped on a sphere - and no arrangement of tidy rings gets
+     near it. So it is a canvas: a few thousand filaments generated once as
+     points on a sphere, turned by a rotation matrix each frame and drawn as
+     short additive strokes.
 
-     Nothing blurred or shadowed is ever animated. That was the old
-     reactor's real cost: a 34px blur and two large box-shadows were being
-     re-rasterised every frame because the elements carrying them were
-     scaling. Here the glow is a gradient painted once, and the only
-     animated property is transform, which the compositor handles alone. */
+     What keeps it cheap: no shadowBlur (the expensive one), additive
+     compositing for the glow instead, a capped pixel ratio, a 30fps ceiling,
+     and the bloom behind it painted once in CSS rather than redrawn. The
+     loop stops entirely when the window is hidden. */
   .stage { display: flex; flex-direction: column; align-items: center; justify-content: center; }
-  svg.dial { width: min(100%, 430px); height: auto; overflow: visible; }
 
-  .dial circle, .dial line, .dial path, .dial polyline { fill: none; vector-effect: non-scaling-stroke; }
+  .holo { position: relative; width: 440px; height: 440px; }
 
-  /* Paint that follows the accent has to be set in CSS, not as an SVG
-     attribute: var() is not substituted in presentation attributes, so
-     fill="var(--accent)" silently painted nothing. */
-  .dial .filled { fill: var(--accent); stroke: none; }
-  .dial .filled.faint { fill-opacity: .14; }
-  .dial .hot { fill: #eaf9ff; stroke: none; }
-  #glow stop, #fade stop { stop-color: var(--accent); }
-
-  .spin {
-    transform-box: view-box; transform-origin: center;
-    animation: turn var(--period) linear infinite;
-    will-change: transform;
+  /* Painted once and never animated. A moving blur is re-rasterised every
+     frame; this one just sits there. */
+  .holo::before {
+    content: ""; position: absolute; inset: -12%;
+    background: radial-gradient(circle at 50% 50%,
+      color-mix(in srgb, var(--accent) 24%, transparent) 0%,
+      color-mix(in srgb, var(--accent) 7%, transparent) 38%, transparent 68%);
+    pointer-events: none;
   }
-  .spin.back { animation-name: turn-back; }
-  @keyframes turn { to { transform: rotate(360deg); } }
-  @keyframes turn-back { to { transform: rotate(-360deg); } }
-
-  /* Scale only. Opacity and transform are the two properties that never
-     force a repaint, and the glow behind this is a separate static layer. */
-  .core { transform-box: view-box; transform-origin: center;
-          animation: beat calc(2.6s / var(--beat)) ease-in-out infinite; will-change: transform; }
-  @keyframes beat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.09); } }
-
-  .dim    { stroke: var(--edge); }
-  .mid    { stroke: var(--accent); opacity: .42; }
-  .bright { stroke: var(--accent); }
-  .tick   { stroke: var(--accent); opacity: .55; }
-  .mark   { fill: var(--muted); font-size: 9px; letter-spacing: .14em; stroke: none; }
+  #globe { position: relative; display: block; width: 100%; height: 100%; }
 
   .state {
-    margin-top: 22px; letter-spacing: .3em; font-weight: 700; font-size: 14px;
+    margin-top: 10px; letter-spacing: .3em; font-weight: 700; font-size: 14px;
     color: var(--accent);
   }
 
@@ -122,7 +103,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .spin, .core, .line { animation: none; }
+    .holo, .cage, .core, .line, .scan::before { animation: none; }
   }
 </style>
 </head>
@@ -142,96 +123,7 @@
 
   <main>
     <div class="stage">
-      <svg class="dial" viewBox="0 0 400 400" aria-hidden="true">
-        <defs>
-          <!-- Painted once. A blur filter here would be re-rasterised on
-               every frame of anything moving above it. -->
-          <radialGradient id="glow">
-            <stop offset="0%"   stop-opacity=".5"/>
-            <stop offset="45%"  stop-opacity=".14"/>
-            <stop offset="100%" stop-opacity="0"/>
-          </radialGradient>
-          <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%"   stop-opacity="0"/>
-            <stop offset="100%" stop-opacity=".9"/>
-          </linearGradient>
-        </defs>
-
-        <circle cx="200" cy="200" r="96" fill="url(#glow)" stroke="none"/>
-
-        <!-- outer bezel and its graduations: 120 fine ticks, one path -->
-        <circle class="dim"  cx="200" cy="200" r="180" stroke-width="1"/>
-        <g class="spin" style="--period: calc(150s / var(--beat))">
-          <circle class="tick" cx="200" cy="200" r="170" stroke-width="7"
-                  pathLength="360" stroke-dasharray="0.5 2.5"/>
-        </g>
-
-        <!-- compass marks, outside everything that turns -->
-        <text class="mark" x="200" y="200" text-anchor="middle"
-              transform="translate(0,-192)">000</text>
-        <text class="mark" x="200" y="200" text-anchor="middle"
-              transform="translate(196,4)">090</text>
-        <text class="mark" x="200" y="200" text-anchor="middle"
-              transform="translate(0,200)">180</text>
-        <text class="mark" x="200" y="200" text-anchor="middle"
-              transform="translate(-196,4)">270</text>
-
-        <!-- four bearing brackets, counter-rotating -->
-        <g class="spin back" style="--period: calc(74s / var(--beat))">
-          <circle class="mid" cx="200" cy="200" r="156" stroke-width="3"
-                  pathLength="360" stroke-dasharray="74 16"/>
-        </g>
-
-        <!-- mid dashed ring -->
-        <g class="spin" style="--period: calc(46s / var(--beat))">
-          <circle class="mid" cx="200" cy="200" r="140" stroke-width="1"
-                  pathLength="360" stroke-dasharray="3 9"/>
-        </g>
-
-        <!-- three calipers: the part that reads as machinery turning -->
-        <g class="spin back" style="--period: calc(28s / var(--beat))">
-          <circle class="bright" cx="200" cy="200" r="127" stroke-width="5"
-                  pathLength="360" stroke-dasharray="34 86" opacity=".85"/>
-        </g>
-
-        <circle class="dim" cx="200" cy="200" r="114" stroke-width="1"/>
-
-        <!-- 24 coarse graduations -->
-        <g class="spin" style="--period: calc(96s / var(--beat))">
-          <circle class="tick" cx="200" cy="200" r="105" stroke-width="9"
-                  pathLength="360" stroke-dasharray="0.8 14.2" opacity=".45"/>
-        </g>
-
-        <!-- the sweep: one arc with a fading stroke, the fastest thing here -->
-        <g class="spin" style="--period: calc(9s / var(--beat))">
-          <circle cx="200" cy="200" r="90" stroke="url(#fade)" stroke-width="2"
-                  pathLength="360" stroke-dasharray="100 260"/>
-        </g>
-
-        <circle class="mid" cx="200" cy="200" r="64" stroke-width="1"/>
-
-        <!-- reticle: crosshair with a gap, and corner brackets -->
-        <g class="mid" stroke-width="1">
-          <line x1="200" y1="136" x2="200" y2="162"/>
-          <line x1="200" y1="238" x2="200" y2="264"/>
-          <line x1="136" y1="200" x2="162" y2="200"/>
-          <line x1="238" y1="200" x2="264" y2="200"/>
-        </g>
-        <g class="bright" stroke-width="1.5" opacity=".8">
-          <polyline points="174,184 174,174 184,174"/>
-          <polyline points="226,184 226,174 216,174"/>
-          <polyline points="174,216 174,226 184,226"/>
-          <polyline points="226,216 226,226 216,226"/>
-        </g>
-
-        <!-- the core: scale only, no shadow to re-rasterise -->
-        <g class="core">
-          <circle class="filled faint" cx="200" cy="200" r="28"/>
-          <circle class="bright" cx="200" cy="200" r="28" stroke-width="1.5"/>
-          <circle class="filled" cx="200" cy="200" r="12"/>
-          <circle class="hot" cx="200" cy="200" r="5.5"/>
-        </g>
-      </svg>
+      <div class="holo"><canvas id="globe" aria-hidden="true"></canvas></div>
       <div class="state" id="state">IDLE</div>
     </div>
 
@@ -251,21 +143,24 @@
   <footer>ESC WINDOWED &nbsp;&nbsp;&nbsp; CTRL+Q CLOSE &nbsp;&nbsp;&nbsp; SAY GOODBYE TO QUIT</footer>
 
 <script>
-// JARVIS is cyan; amber means working. One accent plus a tempo per state.
+// Gold, like the reference. The state shifts the hue a little and the spin a
+// lot, so you can read what reo is doing without it stopping looking like one
+// object. [css accent, hue, spin, heat]
 const STATES = {
-  idle:      ["#2b8fa8", 1],
-  listening: ["#22d3ee", 3.4],
-  thinking:  ["#f2b03c", 2.2],
-  speaking:  ["#8be9f7", 1.7],
+  idle:      ["#c8821f", 34, 1.0, 0.72],
+  listening: ["#ffc24a", 42, 2.6, 1.00],
+  thinking:  ["#ff7a18", 22, 1.9, 0.90],
+  speaking:  ["#ffd98a", 46, 1.5, 0.95],
 };
+let hue = 34, spin = 1.0, heat = 0.72;
 
 window.reo = {
   state(name) {
-    const [colour, beat] = STATES[name] || STATES.idle;
+    const [colour, h, s, hot] = STATES[name] || STATES.idle;
     const root = document.documentElement.style;
     root.setProperty("--accent", colour);
     root.setProperty("--accent-soft", colour + "40");
-    root.setProperty("--beat", beat);
+    hue = h; spin = s; heat = hot;
     document.getElementById("state").textContent = name.toUpperCase();
   },
   line(who, text) {
@@ -283,8 +178,7 @@ window.reo = {
 
   // Rebuilding both panels from innerHTML eight times a second was pure
   // waste: the values change about once a second and the DOM churn was
-  // competing with the animation for the same main thread. Write only
-  // what actually changed.
+  // competing with the projection for the same main thread.
   stats(session, device) {
     draw("session", session);
     draw("device", device);
@@ -343,6 +237,163 @@ async function poll() {
   polling = false;
 }
 setInterval(poll, 120);
+
+
+// ---- the globe ------------------------------------------------------------
+// Not a wireframe. The reference is a ball of thousands of light streaks, and
+// no arrangement of tidy rings gets near it. So: filaments generated once as
+// points on a sphere, turned about the vertical axis each frame, drawn as
+// short additive strokes. Where they overlap they add up and burn to white,
+// which is what lights the core without computing a single blur.
+(() => {
+  const canvas = document.getElementById("globe");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d", { alpha: true });
+
+  // Same arrangement every run, so reo does not look different each launch.
+  let seed = 20261109;
+  const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+
+  const COUNT = 3400;
+  const filaments = [];
+  for (let i = 0; i < COUNT; i++) {
+    // Fibonacci placement: evenly spread, without the clumping at the poles
+    // that picking two random angles gives you.
+    const y = 1 - (i / (COUNT - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const phi = i * 2.399963229728653;
+    const u = [Math.cos(phi) * r, y, Math.sin(phi) * r];
+
+    // A tangent to run along, then spun round the normal by a random amount
+    // so the streaks are not all combed the same way.
+    const helper = Math.abs(u[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
+    let tx = helper[1] * u[2] - helper[2] * u[1];
+    let ty = helper[2] * u[0] - helper[0] * u[2];
+    let tz = helper[0] * u[1] - helper[1] * u[0];
+    const tl = Math.hypot(tx, ty, tz) || 1;
+    tx /= tl; ty /= tl; tz /= tl;
+    const a = random() * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+    const kx = u[1] * tz - u[2] * ty, ky = u[2] * tx - u[0] * tz, kz = u[0] * ty - u[1] * tx;
+    const dir = [tx * ca + kx * sa, ty * ca + ky * sa, tz * ca + kz * sa];
+
+    const spike = random() < 0.22;            // a few stand off the surface
+    filaments.push({
+      u, dir, spike,
+      shell: 0.9 + random() * 0.16,
+      // Short and fine. Long dashes read as a sparse cage; the reference is
+      // closer to city lights seen from orbit.
+      len: spike ? 0.04 + random() * 0.10 : 0.012 + random() * 0.075,
+      bright: 0.3 + random() * 0.7,
+      wide: random() < 0.10,
+    });
+  }
+
+  let width = 0, height = 0;
+  function fit() {
+    const box = canvas.getBoundingClientRect();
+    // Capping the pixel ratio matters: at 2x this is four times the fill.
+    const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+    width = Math.max(1, Math.round(box.width));
+    height = Math.max(1, Math.round(box.height));
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  }
+  fit();
+  addEventListener("resize", fit);
+
+  let turn = 0, last = performance.now(), running = true, due = 0;
+  const FRAME = 1000 / 30;           // 30fps is plenty here and halves the work
+
+  function frame(now) {
+    if (!running) return;
+    const dt = Math.min(now - last, 100);
+    last = now;
+    turn += (dt / 1000) * 0.22 * spin;
+    due -= dt;
+    if (due <= 0) { due = FRAME; paint(); }
+    requestAnimationFrame(frame);
+  }
+
+  function paint() {
+    const cx = width / 2, cy = height / 2;
+    const R = Math.min(width, height) * 0.40;
+    const focal = 3.2;
+    const cos = Math.cos(turn), sin = Math.sin(turn);
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.globalCompositeOperation = "lighter";
+
+    for (const f of filaments) {
+      const ux = f.u[0], uy = f.u[1], uz = f.u[2];
+      const reach = f.spike ? 1.4 : 1;
+      const ex = ux + f.dir[0] * f.len * reach;
+      const ey = uy + f.dir[1] * f.len * reach;
+      const ez = uz + f.dir[2] * f.len * reach;
+
+      const x1 = ux * cos + uz * sin, z1 = uz * cos - ux * sin;
+      const x2 = ex * cos + ez * sin, z2 = ez * cos - ex * sin;
+
+      const s1 = focal / (focal - z1 * f.shell);
+      const s2 = focal / (focal - z2 * f.shell);
+      const px1 = cx + x1 * f.shell * R * s1, py1 = cy - uy * f.shell * R * s1;
+      const px2 = cx + x2 * f.shell * R * s2, py2 = cy - ey * f.shell * R * s2;
+
+      // Depth sets brightness and warmth. The far side stays, dim, so the
+      // thing reads as a volume instead of a disc.
+      const depth = (z1 + 1) / 2;
+      const alpha = f.bright * (0.13 + depth * depth * 1.05) * heat;
+      if (alpha < 0.012) continue;
+      const light = 46 + depth * 36 + (f.spike ? 12 : 0);
+      // The reference rims cool where the sphere turns away; warm in front,
+      // bluer at the edge, which is what gives it roundness.
+      const edge = 1 - Math.abs(z1);
+      const tone = hue + depth * 14 - edge * 26;
+      ctx.strokeStyle = "hsla(" + tone + ", 95%, " + light + "%, " + alpha.toFixed(3) + ")";
+      ctx.lineWidth = f.wide ? 1.5 : 0.65;
+      ctx.beginPath();
+      ctx.moveTo(px1, py1);
+      ctx.lineTo(px2, py2);
+      ctx.stroke();
+    }
+
+    // The swirl at the heart of it.
+    for (let i = 0; i < 4; i++) {
+      const rr = R * (0.12 + i * 0.07);
+      const from = turn * (1.6 + i * 0.5) + i;
+      ctx.strokeStyle = "hsla(" + (hue + 16) + ", 100%, " + (66 + i * 4) + "%, " + ((0.30 - i * 0.05) * heat).toFixed(3) + ")";
+      ctx.lineWidth = 2.1 - i * 0.35;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rr, from, from + 2.1 + i * 0.3);
+      ctx.stroke();
+    }
+
+    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.34);
+    core.addColorStop(0, "hsla(" + (hue + 20) + ", 100%, 88%, " + (0.55 * heat).toFixed(3) + ")");
+    core.addColorStop(0.45, "hsla(" + (hue + 8) + ", 100%, 60%, " + (0.20 * heat).toFixed(3) + ")");
+    core.addColorStop(1, "transparent");
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * 0.34, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  // Nothing to draw into a window nobody can see.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      running = false;
+    } else if (!running) {
+      running = true; last = performance.now(); requestAnimationFrame(frame);
+    }
+  });
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    paint();
+  } else {
+    requestAnimationFrame(frame);
+  }
+})();
 
 setInterval(() => {
   const now = new Date();
