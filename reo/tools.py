@@ -1,10 +1,14 @@
 """Actions reo can take. Only whitelisted, non-destructive actions for now."""
 import datetime
+import json
+import re
 import subprocess
 import urllib.parse
 import webbrowser
 
 import psutil
+
+from . import pointer
 
 # Spoken name -> Windows command. Only these can be launched.
 APPS = {
@@ -168,6 +172,48 @@ def recall(about: str = "") -> str:
     return memory.recall(about)
 
 
+YOUTUBE_SEARCH = "https://www.youtube.com/results?search_query="
+WATCH = "https://www.youtube.com/watch?v="
+_VIDEO_ID = re.compile(r'"videoId":"([\w-]{11})"')
+_TITLE = re.compile(r'"title":\{"runs":\[\{"text":"(.*?)"\}')
+
+
+def play_youtube(query: str, position: int = 1) -> str:
+    """Open a video from a YouTube search, by its address rather than a click.
+
+    "Search for the channel and click the first video" looks like it needs a
+    mouse and eyes, and reo has neither. It does not: the search page carries
+    every result's id, so the nth video has a knowable address and can simply
+    be opened. Deterministic, and it cannot click the wrong thing.
+    """
+    try:
+        page = _client().get(YOUTUBE_SEARCH + urllib.parse.quote_plus(query))
+    except Exception as e:
+        return f"Could not reach YouTube: {e}"
+    if page.status_code != 200:
+        return f"YouTube returned HTTP {page.status_code}."
+
+    found = list(dict.fromkeys(_VIDEO_ID.findall(page.text)))
+    if not found:
+        return f"No videos found for {query}."
+    wanted = max(1, int(position or 1))
+    if wanted > len(found):
+        return f"Only found {len(found)} videos for {query}."
+    video = found[wanted - 1]
+
+    name = ""
+    titles = _TITLE.findall(page.text)
+    if len(titles) >= wanted:
+        try:    # the page stores titles JSON-escaped
+            name = json.loads(f'"{titles[wanted - 1]}"')
+        except ValueError:
+            name = titles[wanted - 1]
+
+    webbrowser.open(WATCH + video)
+    which = "first" if wanted == 1 else f"number {wanted}"
+    return f"Playing the {which} result{f': {name}' if name else ''}."
+
+
 def open_search(query: str) -> str:
     """Put the results on screen when the user wants to look themselves."""
     webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(query))
@@ -211,6 +257,12 @@ FUNCTIONS = {
     "open_website": open_website,
     "search_web": search_web,
     "look_up": look_up,
+    "play_youtube": play_youtube,
+    "move_cursor": lambda x, y: pointer.move(x, y),
+    "click_mouse": lambda x=None, y=None, button="left", double=False: pointer.click(
+        x, y, button, double),
+    "scroll_mouse": lambda amount=-3: pointer.scroll(amount),
+    "cursor_position": lambda: pointer.where(),
     "remember": remember,
     "forget": forget,
     "recall": recall,
@@ -318,6 +370,52 @@ TOOLS = [
             "type": "object",
             "properties": {"url": {"type": "string", "description": "Full URL to read"}},
             "required": ["url"],
+        },
+    },
+    {
+        "name": "play_youtube",
+        "description": "Search YouTube and open a result. Use instead of trying to click.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "position": {"type": "integer", "description": "1 = first"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "cursor_position",
+        "description": "Pointer position and screen size.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "move_cursor",
+        "description": "Move the pointer to a coordinate.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+            "required": ["x", "y"],
+        },
+    },
+    {
+        "name": "click_mouse",
+        "description": "Click, moving there first. Only coordinates you were given; never guess.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer"}, "y": {"type": "integer"},
+                "button": {"type": "string", "enum": ["left", "right", "middle"]},
+                "double": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "scroll_mouse",
+        "description": "Scroll the wheel. Negative is down.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"amount": {"type": "integer"}},
         },
     },
     {

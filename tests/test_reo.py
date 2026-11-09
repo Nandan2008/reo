@@ -13,6 +13,7 @@ from openai import APIStatusError, RateLimitError
 
 from reo import config, fastpath, providers, tools
 from reo import memory as memory_module
+from reo import pointer
 from reo.memory import Memory
 from reo.audio import looks_hallucinated
 from reo.audio import normalize as normalize_gain
@@ -1063,6 +1064,85 @@ class MicrophoneFailures(unittest.TestCase):
         listener = self._listener()
         with mock.patch.object(sd, "InputStream", refuse):
             self.assertIsNone(listener._record())   # and does not raise
+
+
+class YouTube(unittest.TestCase):
+    """"Click the first video" is not a clicking problem: the search page
+    carries every result's id, so the video has an address."""
+
+    PAGE = ('{"videoId":"aaaaaaaaaaa","title":{"runs":[{"text":"First one"}]},'
+            '"videoId":"bbbbbbbbbbb","title":{"runs":[{"text":"Second one"}]},'
+            '"videoId":"aaaaaaaaaaa"}')
+
+    def _play(self, page, status=200, **kwargs):
+        opened = []
+        client = lambda timeout=15: SimpleNamespace(
+            get=lambda url: SimpleNamespace(status_code=status, text=page))
+        with mock.patch.object(tools, "_client", client),              mock.patch.object(tools, "webbrowser",
+                               SimpleNamespace(open=opened.append)):
+            said = tools.play_youtube("mrbeast gaming", **kwargs)
+        return said, opened
+
+    def test_the_first_result_is_opened(self):
+        said, opened = self._play(self.PAGE)
+        self.assertEqual(opened, ["https://www.youtube.com/watch?v=aaaaaaaaaaa"])
+        self.assertIn("First one", said)
+
+    def test_a_later_result_can_be_asked_for(self):
+        said, opened = self._play(self.PAGE, position=2)
+        self.assertEqual(opened, ["https://www.youtube.com/watch?v=bbbbbbbbbbb"])
+        self.assertIn("Second one", said)
+
+    def test_a_repeated_id_is_not_counted_twice(self):
+        """The page mentions the same video several times over."""
+        said, opened = self._play(self.PAGE, position=3)
+        self.assertIn("Only found 2", said)
+        self.assertEqual(opened, [])
+
+    def test_nothing_found_opens_nothing(self):
+        said, opened = self._play("{}")
+        self.assertIn("No videos found", said)
+        self.assertEqual(opened, [])
+
+    def test_a_refusal_from_youtube_is_reported(self):
+        said, opened = self._play("", status=429)
+        self.assertIn("429", said)
+        self.assertEqual(opened, [])
+
+    def test_an_escaped_title_is_readable(self):
+        page = '{"videoId":"ccccccccccc","title":{"runs":[{"text":"100 \u0024 Challenge"}]}}'
+        said, _ = self._play(page)
+        self.assertIn("100 $ Challenge", said)
+
+
+class Pointer(unittest.TestCase):
+    """reo has no eyes, so a coordinate it cannot check is one it must refuse."""
+
+    def test_an_off_screen_click_is_refused_not_clamped(self):
+        """Clamping turns a misheard number into a plausible click, and the
+        corners of a screen hold Close and Start."""
+        with mock.patch.object(pointer, "screen", lambda: (2560, 1600)):
+            self.assertIn("off the screen", pointer.move(9999, 10))
+            self.assertIn("off the screen", pointer.move(10, -5))
+
+    def test_a_coordinate_on_screen_is_accepted(self):
+        moved = []
+        fake = SimpleNamespace(position=(0, 0))
+        with mock.patch.object(pointer, "screen", lambda: (2560, 1600)),              mock.patch.object(pointer, "_controller", lambda: fake):
+            said = pointer.move(100, 200)
+        self.assertEqual(fake.position, (100, 200))
+        self.assertIn("(100, 200)", said)
+
+    def test_turning_the_mouse_off_refuses_everything(self):
+        with mock.patch.object(config, "ALLOW_MOUSE", False):
+            for said in (pointer.move(1, 1), pointer.click(1, 1),
+                         pointer.scroll(-3), pointer.where()):
+                self.assertIn("REO_ALLOW_MOUSE", said)
+
+    def test_an_unknown_button_is_refused(self):
+        with mock.patch.object(pointer, "screen", lambda: (2560, 1600)),              mock.patch.object(pointer, "_controller",
+                               lambda: SimpleNamespace(position=(0, 0))):
+            self.assertIn("No such mouse button", pointer.click(button="elbow"))
 
 
 if __name__ == "__main__":

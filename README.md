@@ -159,6 +159,26 @@ the old reactor's real cost, a 34px blur and two large box-shadows being
 re-rasterised every frame because the elements carrying them were scaling.
 Only `transform` moves, which the compositor handles without repainting.
 
+## Playing a video
+
+"Search for the channel and play the first video" looks like it needs a mouse
+and eyes. It does not. The YouTube search page carries every result's id, so
+`play_youtube` reads the id and opens the video's own address - deterministic,
+and it cannot click the wrong thing.
+
+## The mouse
+
+`REO_ALLOW_MOUSE=1` lets reo move the pointer, click and scroll.
+
+Be clear about the limit: **reo cannot see the screen.** There is no vision
+model on this account, so it has no way to find a button and no way to check
+what it just clicked. It can only use coordinates you give it, or ones a tool
+reported back, and it is told never to guess. A coordinate off the screen is
+refused rather than clamped - clamping turns a misheard number into a
+plausible click, and the corners of a screen hold Close and Start.
+
+That limit is why `play_youtube` exists rather than an attempt at clicking.
+
 ## Running things on the machine
 
 Set `REO_ALLOW_SHELL=1` in `.env` and reo can run PowerShell: files, folders,

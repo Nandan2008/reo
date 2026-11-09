@@ -73,6 +73,10 @@ elif UI in ("0", "false", "no"):
 # Let reo run commands on the machine. Off unless you turn it on: it is driven
 # by speech that mishears, and by web pages that can be written to steer it.
 ALLOW_SHELL = os.getenv("REO_ALLOW_SHELL", "0") not in ("0", "false", "no")
+# Let reo move and click the mouse. It has no way to see the screen, so it can
+# only click where it is told - coordinates you give it, or ones a tool
+# reported back. It is told never to guess.
+ALLOW_MOUSE = os.getenv("REO_ALLOW_MOUSE", "1") not in ("0", "false", "no")
 # pynput spelling: <ctrl> <alt> <shift> <cmd> plus a letter.
 HOTKEY = os.getenv("REO_HOTKEY", "<ctrl>+<alt>+r")
 # Wake detection: "phrase" uses a model trained on the wake word itself and is
