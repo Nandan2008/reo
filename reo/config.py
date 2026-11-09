@@ -47,7 +47,11 @@ SPEECH_SPEED = float(os.getenv("REO_SPEECH_SPEED", "1.15"))
 
 SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = float(os.getenv("REO_SILENCE_THRESHOLD", "0.01"))
-SILENCE_SECONDS = float(os.getenv("REO_SILENCE_SECONDS", "0.5"))  # pause that means "done talking"
+# The pause that means "done talking". 0.5 was cutting sentences in half: a
+# measured recording showed an ordinary mid-sentence pause lasting 0.8s, after
+# which reo had already stopped listening and transcribed the first half alone.
+# That is where "Abad" came from - the tail of Hyderabad, arriving by itself.
+SILENCE_SECONDS = float(os.getenv("REO_SILENCE_SECONDS", "0.9"))
 WAIT_FOR_SPEECH_SECONDS = 6  # give up if you say nothing
 MAX_RECORD_SECONDS = 20
 

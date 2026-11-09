@@ -13,7 +13,11 @@ BLOCK = 0.1
 SECONDS = 6
 
 
-PHRASE = "Reo, what time is it?"
+# The words that actually fail are the point of this test, so the phrase is
+# built from them: "Hyderabad" came back as "Bunt", "Abad" and "chydra bad",
+# "Claude" as "cloth" and "claw", "Reo" as "Real". A phrase reo already gets
+# right would prove nothing.
+PHRASE = "Reo, open Claude and tell me the weather in Hyderabad"
 
 
 def meter():
@@ -65,8 +69,14 @@ def verdict(levels):
         print(f"\nPROBLEM: the room alone is over the threshold, so reo never hears silence.")
         print(f"Set REO_SILENCE_THRESHOLD={(peak + quiet) / 2:.4f} in .env")
     else:
-        midpoint = (peak + quiet) / 2
-        print(f"\nLevels look usable. A good threshold sits between the two: ~{midpoint:.4f}")
+        # Just clear of the room, not halfway to your loudest syllable. Speech
+        # is not one level: the quiet end of a sentence runs well below its
+        # peak, and a threshold near the middle hears the start of what you
+        # say and gives up before the end.
+        suggested = max(quiet * 2.5, 0.0015)
+        print(f"\nLevels look usable. Room floor is {quiet:.4f}, so a threshold")
+        print(f"just clear of it catches the quiet end of a sentence: ~{suggested:.4f}")
+        print(f"(halfway to your peak would be {(peak + quiet) / 2:.4f}, which is too deaf)")
 
 
 def transcribe(audio):
@@ -84,12 +94,11 @@ def transcribe(audio):
         w.writeframes((gained * 32767).astype(np.int16).tobytes())
     print("saved diagnose.wav so you can play back what the mic actually got")
 
-    print("
-What each model hears, and how long it takes. Pick the smallest one")
-    print("that gets your words right, and put it in .env as REO_WHISPER_MODEL.
-")
-    print(f"  vocabulary hint: {config.VOCABULARY or '(none)'}
-")
+    print()
+    print("What each model hears, and how long it takes. Pick the smallest one")
+    print("that gets your words right, and put it in .env as REO_WHISPER_MODEL.")
+    print(f"  vocabulary hint: {config.VOCABULARY or '(none)'}")
+    print()
 
     seen = []
     for name in dict.fromkeys(["tiny", "base", "small", config.WHISPER_MODEL]):
