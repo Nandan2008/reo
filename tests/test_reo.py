@@ -15,7 +15,7 @@ from reo import config, fastpath, providers, tools
 from reo import memory as memory_module
 from reo import pointer
 from reo.memory import Memory
-from reo.audio import looks_hallucinated
+from reo.audio import has_speech, looks_hallucinated
 from reo.audio import normalize as normalize_gain
 from reo.__main__ import EXIT_PHRASES
 from reo.text import is_speech, normalize
@@ -1182,6 +1182,92 @@ class Pointer(unittest.TestCase):
         with mock.patch.object(pointer, "screen", lambda: (2560, 1600)),              mock.patch.object(pointer, "_controller",
                                lambda: SimpleNamespace(position=(0, 0))):
             self.assertIn("No such mouse button", pointer.click(button="elbow"))
+
+
+class Inventions(unittest.TestCase):
+    """Whisper does not return nothing for silence. It makes something up.
+
+    Given a few seconds of room noise it produced "I've been on 30 YouTube
+    videos again and again and again and again", and reo answered it as
+    though it had been said.
+    """
+
+    HEARD = [
+        "I've been on 30 YouTube videos again and again and again and again.",
+        "Thank you. Thank you. Thank you.",
+        "you you you you",
+        "Subtitles by the Amara.org community Subtitles by the Amara.org community",
+    ]
+    REAL = [
+        "Open the first video",
+        "Play MrBeast Gaming and then open the second video",
+        "I said it again and again",          # twice over is emphasis, not a loop
+        "No no, open it",
+        "No no no, stop",                    # a person insisting, not a loop
+        "What's the weather in Hyderabad",
+        "Play it again",
+    ]
+
+    def test_the_inventions_are_caught(self):
+        for said in self.HEARD:
+            with self.subTest(said=said):
+                self.assertTrue(looks_hallucinated(said))
+
+    def test_real_speech_is_left_alone(self):
+        for said in self.REAL:
+            with self.subTest(said=said):
+                self.assertFalse(looks_hallucinated(said))
+
+    def test_silence_never_reaches_whisper(self):
+        self.assertFalse(has_speech(np.zeros(16000, dtype=np.float32), 0.012))
+
+    def test_a_quiet_room_never_reaches_whisper(self):
+        room = np.full(16000, 0.0012, dtype=np.float32)   # his measured floor
+        self.assertFalse(has_speech(room, 0.012))
+
+    def test_ordinary_speech_gets_through(self):
+        speech = np.full(16000, 0.07, dtype=np.float32)   # his measured peak
+        self.assertTrue(has_speech(speech, 0.012))
+
+    def test_an_empty_recording_is_not_speech(self):
+        self.assertFalse(has_speech(np.array([], dtype=np.float32), 0.012))
+        self.assertFalse(has_speech(None, 0.012))
+
+    def test_a_single_loud_moment_counts(self):
+        """One word in an otherwise quiet six seconds is still a word."""
+        clip = np.full(16000, 0.001, dtype=np.float32)
+        clip[8000:8400] = 0.06
+        self.assertTrue(has_speech(clip, 0.012))
+
+
+class SilentSegments(unittest.TestCase):
+    """Whisper rates how likely each segment is to be silence; reo now listens."""
+
+    def _listener(self, segments):
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.transcribe_seconds = 0.0
+        listener._record = lambda stop_now=None: np.full(16000, 0.07, dtype=np.float32)
+        listener.model = SimpleNamespace(
+            transcribe=lambda *a, **kw: (iter(segments), SimpleNamespace()))
+        return listener
+
+    @staticmethod
+    def _segment(text, no_speech=0.0):
+        return SimpleNamespace(text=text, no_speech_prob=no_speech)
+
+    def test_a_segment_whisper_calls_silence_is_dropped(self):
+        listener = self._listener([self._segment(" Open it", 0.1),
+                                   self._segment(" Thanks for watching!", 0.95)])
+        self.assertEqual(listener.listen(), "Open it")
+
+    def test_all_silent_segments_leave_nothing(self):
+        listener = self._listener([self._segment(" Thanks for watching!", 0.95)])
+        self.assertEqual(listener.listen(), "")
+
+    def test_confident_speech_is_kept(self):
+        listener = self._listener([self._segment(" Play the first video", 0.02)])
+        self.assertEqual(listener.listen(), "Play the first video")
 
 
 if __name__ == "__main__":

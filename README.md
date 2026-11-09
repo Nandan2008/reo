@@ -88,6 +88,20 @@ to choose from all ninety-nine, Whisper read an Indian accent as Russian and
 Spanish and wrote fluent nonsense - "Благодарю!" for a question asked in
 English. It cannot now answer in a language you do not speak.
 
+## Things you did not say
+
+Whisper does not return nothing when it hears nothing. It invents, usually
+something from its training data: "Thanks for watching!", "Subtitles by the
+Amara.org community", or a phrase stuttering - "again and again and again and
+again". reo used to answer these as though they had been said.
+
+Three things stop it, because no one of them is enough. A recording whose
+loudest moment never approaches speech is thrown away before transcription
+(`REO_SPEECH_FLOOR`). Whisper's own judgement that a segment is silence is
+believed (`REO_NO_SPEECH_PROB`). And text that loops is discarded - with the
+threshold depending on how long the repeated run is, so "no no no, stop"
+survives and "you you you you" does not.
+
 ## Hearing you properly
 
 Accents are where Whisper struggles, and proper nouns are most of what it gets

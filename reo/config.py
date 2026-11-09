@@ -47,6 +47,13 @@ SPEECH_SPEED = float(os.getenv("REO_SPEECH_SPEED", "1.15"))
 
 SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = float(os.getenv("REO_SILENCE_THRESHOLD", "0.01"))
+# A recording whose loudest moment is below this never reaches Whisper, which
+# does not return nothing for silence - it invents. Measured on this laptop:
+# room 0.0012, ordinary speech peaking around 0.06, so this sits ten times
+# over the room and well under anything actually said.
+SPEECH_FLOOR = float(os.getenv("REO_SPEECH_FLOOR", "0.012"))
+# Whisper's own opinion that a segment is not speech. Above this it is dropped.
+NO_SPEECH_PROB = float(os.getenv("REO_NO_SPEECH_PROB", "0.6"))
 # The pause that means "done talking". 0.5 was cutting sentences in half: a
 # measured recording showed an ordinary mid-sentence pause lasting 0.8s, after
 # which reo had already stopped listening and transcribed the first half alone.

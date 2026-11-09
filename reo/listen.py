@@ -116,6 +116,10 @@ class Listener:
         audio = self._record(stop_now)
         if audio is None:
             return ""
+        # Before anything expensive: was that actually someone talking?
+        if not au.has_speech(audio, config.SPEECH_FLOOR):
+            print("  (only room noise)")
+            return ""
         clean = au.normalize(audio)
 
         started = time.time()
@@ -124,7 +128,12 @@ class Listener:
         segments, _ = self.model.transcribe(
             clean, language=self.language, beam_size=config.BEAM_SIZE,
             hotwords=config.VOCABULARY or None, vad_filter=True, **au.CAREFUL)
-        text = " ".join(s.text for s in segments).strip()
+        # Whisper rates how likely each segment is to be silence. Taking its
+        # word for that costs nothing and catches the inventions that get
+        # past the loudness gate.
+        text = " ".join(
+            s.text for s in segments
+            if getattr(s, "no_speech_prob", 0.0) <= config.NO_SPEECH_PROB).strip()
         self.transcribe_seconds = time.time() - started
 
         if au.looks_hallucinated(text):
