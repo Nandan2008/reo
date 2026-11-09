@@ -8,8 +8,13 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 # Anything slower than this is a stall, not an answer.
 REQUEST_TIMEOUT = float(os.getenv("REO_REQUEST_TIMEOUT", "25"))
+# How hard a reasoning model should think before a one-sentence answer.
+# "low", "medium", "high", or blank to leave it to the model.
+REASONING_EFFORT = os.getenv("REO_REASONING", "low").strip()
 WHISPER_MODEL = os.getenv("REO_WHISPER_MODEL", "base")
-# Blank detects the language each time. Set e.g. "en" or "hi" to pin it and save a step.
+# Blank means reo works the language out from the first thing it hears and
+# then reuses it. Detection costs about as much as the transcription itself,
+# so setting "en", "hi", "te" ... skips even that first time.
 LANGUAGE = os.getenv("REO_LANGUAGE", "").strip() or None
 
 # "pyttsx3" is offline and instant; "orpheus" is expressive but needs the model

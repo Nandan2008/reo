@@ -6,12 +6,13 @@
 <style>
   :root {
     --bg: #04070b;
-    --accent: #19d2e6;
-    --accent-soft: #19d2e633;
+    --accent: #2b8fa8;
+    --accent-soft: #2b8fa840;
     --text: #c6dcee;
     --muted: #51687d;
     --edge: #16293a;
-    --spin: 26s;
+    /* One number drives every ring: the state sets it, each ring multiplies it. */
+    --beat: 1;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -22,8 +23,7 @@
     font: 13px/1.5 Consolas, "Cascadia Mono", monospace;
     height: 100vh;
     overflow: hidden;
-    /* a faint vignette so the reactor is the brightest thing on screen */
-    background-image: radial-gradient(ellipse at 28% 50%, #0a141d 0%, var(--bg) 62%);
+    background-image: radial-gradient(ellipse at 30% 50%, #091420 0%, var(--bg) 64%);
   }
 
   .frame { position: fixed; inset: 18px; pointer-events: none; }
@@ -49,62 +49,54 @@
     display: grid; grid-template-columns: minmax(360px, 34%) 1fr 212px; gap: 34px;
   }
 
-  /* ---- the reactor ---- */
+  /* ---- the instrument -------------------------------------------------
+     Rings are SVG strokes, not stacked divs. Every circle carries
+     pathLength="360", which makes stroke-dasharray read in degrees: "1 2"
+     is 120 ticks whatever the radius, so the geometry needs no arithmetic
+     and stays crisp at any window size.
+
+     Nothing blurred or shadowed is ever animated. That was the old
+     reactor's real cost: a 34px blur and two large box-shadows were being
+     re-rasterised every frame because the elements carrying them were
+     scaling. Here the glow is a gradient painted once, and the only
+     animated property is transform, which the compositor handles alone. */
   .stage { display: flex; flex-direction: column; align-items: center; justify-content: center; }
-  .reactor { position: relative; width: 340px; height: 340px; }
-  .reactor > * { position: absolute; inset: 0; border-radius: 50%; }
+  svg.dial { width: min(100%, 430px); height: auto; overflow: visible; }
 
-  .halo {
-    background: radial-gradient(circle, var(--accent) 0%, transparent 62%);
-    opacity: .20; filter: blur(34px); animation: breathe 4.6s ease-in-out infinite;
-  }
-  .housing { border: 2px solid color-mix(in srgb, var(--accent) 48%, transparent); }
-  .hairline { inset: 14px; border: 1px solid var(--edge); }
+  .dial circle, .dial line, .dial path, .dial polyline { fill: none; vector-effect: non-scaling-stroke; }
 
-  /* coils: a conic gradient cut into a ring by a mask */
-  .coils {
-    inset: 30px;
-    background: repeating-conic-gradient(
-      var(--accent) 0deg 23deg, transparent 23deg 36deg);
-    -webkit-mask: radial-gradient(circle, transparent 60%, #000 61%, #000 84%, transparent 85%);
-    mask: radial-gradient(circle, transparent 60%, #000 61%, #000 84%, transparent 85%);
-    filter: drop-shadow(0 0 9px var(--accent-soft));
-    animation: turn var(--spin) linear infinite;
-  }
-  .sweep {
-    inset: 6px;
-    background: conic-gradient(from 0deg, transparent 0deg 312deg, var(--accent) 352deg, transparent 360deg);
-    -webkit-mask: radial-gradient(circle, transparent 93%, #000 94%);
-    mask: radial-gradient(circle, transparent 93%, #000 94%);
-    animation: turn 7s linear infinite;
-  }
-  .sweep.back { inset: 48px; animation: turn-back 11s linear infinite; opacity: .6; }
+  /* Paint that follows the accent has to be set in CSS, not as an SVG
+     attribute: var() is not substituted in presentation attributes, so
+     fill="var(--accent)" silently painted nothing. */
+  .dial .filled { fill: var(--accent); stroke: none; }
+  .dial .filled.faint { fill-opacity: .14; }
+  .dial .hot { fill: #eaf9ff; stroke: none; }
+  #glow stop, #fade stop { stop-color: var(--accent); }
 
-  .chamber { inset: 92px; border: 2px solid color-mix(in srgb, var(--accent) 66%, transparent); }
-  .spokes {
-    inset: 92px;
-    background: repeating-conic-gradient(
-      color-mix(in srgb, var(--accent) 70%, transparent) 0deg 1.6deg, transparent 1.6deg 60deg);
-    -webkit-mask: radial-gradient(circle, transparent 74%, #000 75%);
-    mask: radial-gradient(circle, transparent 74%, #000 75%);
-    animation: turn-back 19s linear infinite;
+  .spin {
+    transform-box: view-box; transform-origin: center;
+    animation: turn var(--period) linear infinite;
+    will-change: transform;
   }
-
-  .core {
-    inset: 124px;
-    background: radial-gradient(circle, #ffffff 0%, #ffffff 16%,
-                color-mix(in srgb, var(--accent) 86%, #fff) 38%, var(--accent) 62%, transparent 76%);
-    box-shadow: 0 0 46px 10px var(--accent-soft), 0 0 110px 26px var(--accent-soft);
-    animation: breathe 2.9s ease-in-out infinite;
-  }
-
+  .spin.back { animation-name: turn-back; }
   @keyframes turn { to { transform: rotate(360deg); } }
   @keyframes turn-back { to { transform: rotate(-360deg); } }
-  @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+
+  /* Scale only. Opacity and transform are the two properties that never
+     force a repaint, and the glow behind this is a separate static layer. */
+  .core { transform-box: view-box; transform-origin: center;
+          animation: beat calc(2.6s / var(--beat)) ease-in-out infinite; will-change: transform; }
+  @keyframes beat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.09); } }
+
+  .dim    { stroke: var(--edge); }
+  .mid    { stroke: var(--accent); opacity: .42; }
+  .bright { stroke: var(--accent); }
+  .tick   { stroke: var(--accent); opacity: .55; }
+  .mark   { fill: var(--muted); font-size: 9px; letter-spacing: .14em; stroke: none; }
 
   .state {
-    margin-top: 26px; letter-spacing: .3em; font-weight: 700; font-size: 14px;
-    color: var(--accent); text-shadow: 0 0 16px var(--accent-soft);
+    margin-top: 22px; letter-spacing: .3em; font-weight: 700; font-size: 14px;
+    color: var(--accent);
   }
 
   /* ---- transcript ---- */
@@ -128,6 +120,10 @@
     position: fixed; left: 46px; bottom: 26px;
     color: var(--muted); font-size: 9px; letter-spacing: .2em;
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spin, .core, .line { animation: none; }
+  }
 </style>
 </head>
 <body>
@@ -146,17 +142,96 @@
 
   <main>
     <div class="stage">
-      <div class="reactor">
-        <div class="halo"></div>
-        <div class="sweep"></div>
-        <div class="housing"></div>
-        <div class="hairline"></div>
-        <div class="coils"></div>
-        <div class="sweep back"></div>
-        <div class="spokes"></div>
-        <div class="chamber"></div>
-        <div class="core"></div>
-      </div>
+      <svg class="dial" viewBox="0 0 400 400" aria-hidden="true">
+        <defs>
+          <!-- Painted once. A blur filter here would be re-rasterised on
+               every frame of anything moving above it. -->
+          <radialGradient id="glow">
+            <stop offset="0%"   stop-opacity=".5"/>
+            <stop offset="45%"  stop-opacity=".14"/>
+            <stop offset="100%" stop-opacity="0"/>
+          </radialGradient>
+          <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stop-opacity="0"/>
+            <stop offset="100%" stop-opacity=".9"/>
+          </linearGradient>
+        </defs>
+
+        <circle cx="200" cy="200" r="96" fill="url(#glow)" stroke="none"/>
+
+        <!-- outer bezel and its graduations: 120 fine ticks, one path -->
+        <circle class="dim"  cx="200" cy="200" r="180" stroke-width="1"/>
+        <g class="spin" style="--period: calc(150s / var(--beat))">
+          <circle class="tick" cx="200" cy="200" r="170" stroke-width="7"
+                  pathLength="360" stroke-dasharray="0.5 2.5"/>
+        </g>
+
+        <!-- compass marks, outside everything that turns -->
+        <text class="mark" x="200" y="200" text-anchor="middle"
+              transform="translate(0,-192)">000</text>
+        <text class="mark" x="200" y="200" text-anchor="middle"
+              transform="translate(196,4)">090</text>
+        <text class="mark" x="200" y="200" text-anchor="middle"
+              transform="translate(0,200)">180</text>
+        <text class="mark" x="200" y="200" text-anchor="middle"
+              transform="translate(-196,4)">270</text>
+
+        <!-- four bearing brackets, counter-rotating -->
+        <g class="spin back" style="--period: calc(74s / var(--beat))">
+          <circle class="mid" cx="200" cy="200" r="156" stroke-width="3"
+                  pathLength="360" stroke-dasharray="74 16"/>
+        </g>
+
+        <!-- mid dashed ring -->
+        <g class="spin" style="--period: calc(46s / var(--beat))">
+          <circle class="mid" cx="200" cy="200" r="140" stroke-width="1"
+                  pathLength="360" stroke-dasharray="3 9"/>
+        </g>
+
+        <!-- three calipers: the part that reads as machinery turning -->
+        <g class="spin back" style="--period: calc(28s / var(--beat))">
+          <circle class="bright" cx="200" cy="200" r="127" stroke-width="5"
+                  pathLength="360" stroke-dasharray="34 86" opacity=".85"/>
+        </g>
+
+        <circle class="dim" cx="200" cy="200" r="114" stroke-width="1"/>
+
+        <!-- 24 coarse graduations -->
+        <g class="spin" style="--period: calc(96s / var(--beat))">
+          <circle class="tick" cx="200" cy="200" r="105" stroke-width="9"
+                  pathLength="360" stroke-dasharray="0.8 14.2" opacity=".45"/>
+        </g>
+
+        <!-- the sweep: one arc with a fading stroke, the fastest thing here -->
+        <g class="spin" style="--period: calc(9s / var(--beat))">
+          <circle cx="200" cy="200" r="90" stroke="url(#fade)" stroke-width="2"
+                  pathLength="360" stroke-dasharray="100 260"/>
+        </g>
+
+        <circle class="mid" cx="200" cy="200" r="64" stroke-width="1"/>
+
+        <!-- reticle: crosshair with a gap, and corner brackets -->
+        <g class="mid" stroke-width="1">
+          <line x1="200" y1="136" x2="200" y2="162"/>
+          <line x1="200" y1="238" x2="200" y2="264"/>
+          <line x1="136" y1="200" x2="162" y2="200"/>
+          <line x1="238" y1="200" x2="264" y2="200"/>
+        </g>
+        <g class="bright" stroke-width="1.5" opacity=".8">
+          <polyline points="174,184 174,174 184,174"/>
+          <polyline points="226,184 226,174 216,174"/>
+          <polyline points="174,216 174,226 184,226"/>
+          <polyline points="226,216 226,226 216,226"/>
+        </g>
+
+        <!-- the core: scale only, no shadow to re-rasterise -->
+        <g class="core">
+          <circle class="filled faint" cx="200" cy="200" r="28"/>
+          <circle class="bright" cx="200" cy="200" r="28" stroke-width="1.5"/>
+          <circle class="filled" cx="200" cy="200" r="12"/>
+          <circle class="hot" cx="200" cy="200" r="5.5"/>
+        </g>
+      </svg>
       <div class="state" id="state">IDLE</div>
     </div>
 
@@ -176,20 +251,21 @@
   <footer>ESC WINDOWED &nbsp;&nbsp;&nbsp; CTRL+Q CLOSE &nbsp;&nbsp;&nbsp; SAY GOODBYE TO QUIT</footer>
 
 <script>
-const ACCENT = {
-  idle:      ["#2b8fb8", "34s"],
-  listening: ["#19d2e6", "9s"],
-  thinking:  ["#e0a93a", "13s"],
-  speaking:  ["#2fd389", "20s"],
+// JARVIS is cyan; amber means working. One accent plus a tempo per state.
+const STATES = {
+  idle:      ["#2b8fa8", 1],
+  listening: ["#22d3ee", 3.4],
+  thinking:  ["#f2b03c", 2.2],
+  speaking:  ["#8be9f7", 1.7],
 };
 
 window.reo = {
   state(name) {
-    const [colour, spin] = ACCENT[name] || ACCENT.idle;
+    const [colour, beat] = STATES[name] || STATES.idle;
     const root = document.documentElement.style;
     root.setProperty("--accent", colour);
     root.setProperty("--accent-soft", colour + "40");
-    root.setProperty("--spin", spin);
+    root.setProperty("--beat", beat);
     document.getElementById("state").textContent = name.toUpperCase();
   },
   line(who, text) {
@@ -204,17 +280,37 @@ window.reo = {
     while (log.children.length > 15) log.removeChild(log.firstChild);
   },
   subtitle(text) { document.getElementById("subtitle").textContent = text.toUpperCase(); },
+
+  // Rebuilding both panels from innerHTML eight times a second was pure
+  // waste: the values change about once a second and the DOM churn was
+  // competing with the animation for the same main thread. Write only
+  // what actually changed.
   stats(session, device) {
-    const draw = (id, rows) => {
-      document.getElementById(id).innerHTML = rows.map(([k, v, pct]) =>
-        `<div class="stat"><span>${k}</span><b>${v}</b></div>` +
-        (pct === undefined ? "" : `<div class="bar"><i style="width:${pct}%"></i></div>`)
-      ).join("");
-    };
     draw("session", session);
     draw("device", device);
   },
 };
+
+const drawn = {};
+function draw(id, rows) {
+  const key = JSON.stringify(rows);
+  if (drawn[id] === key) return;
+  const first = drawn[id] === undefined;
+  drawn[id] = key;
+  const host = document.getElementById(id);
+  if (first || host.children.length !== rows.length) {
+    host.innerHTML = rows.map(() =>
+      `<div class="stat"><span></span><b></b></div><div class="bar" hidden><i></i></div>`
+    ).join("");
+  }
+  rows.forEach(([k, v, pct], i) => {
+    const stat = host.children[i * 2], bar = host.children[i * 2 + 1];
+    stat.children[0].textContent = k;
+    stat.children[1].textContent = v;
+    bar.hidden = pct === undefined;
+    if (pct !== undefined) bar.children[0].style.width = pct + "%";
+  });
+}
 
 // Escape leaves fullscreen, Ctrl+Q closes. Without these the fullscreen
 // window had no way out at all.
@@ -251,8 +347,7 @@ setInterval(poll, 120);
 setInterval(() => {
   const now = new Date();
   document.getElementById("clock").textContent = now.toLocaleTimeString("en-GB");
-  document.getElementById("date").textContent =
-    now.toDateString().toUpperCase();
+  document.getElementById("date").textContent = now.toDateString().toUpperCase();
 }, 1000);
 </script>
 </body>

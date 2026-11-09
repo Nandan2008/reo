@@ -37,11 +37,28 @@ NAMED_TAG = re.compile(r"\[(\w+)]")
 
 
 def _undouble(text: str) -> str:
-    """gpt-oss sometimes emits its whole answer twice. Say it once."""
+    """gpt-oss sometimes emits its whole answer twice. Say it once.
+
+    It also sometimes tacks the bare answer onto the end of the sentence that
+    already contained it - "The capital of Peru is Lima. Lima." - so a short
+    last fragment that the sentence before already said is dropped too. The
+    fragment has to be contained in the previous sentence, which leaves
+    "I like Rome. Rome is warm." alone.
+    """
     parts = [p.strip() for p in re.split(r"(?<=[.!?])\s*", text) if p.strip()]
     if len(parts) > 1 and len(set(parts)) == 1:
         return parts[0]
-    return text
+    while len(parts) > 1 and _is_echo(parts[-1], parts[-2]):
+        parts.pop()
+    return " ".join(parts)
+
+
+def _is_echo(tail: str, before: str) -> bool:
+    """Is this short last fragment just the end of the sentence before it?"""
+    words = tail.rstrip(".!?").strip().lower()
+    if not words or len(words.split()) > 4:
+        return False
+    return words in before.rstrip(".!?").strip().lower()
 
 
 def split_emotion(text: str) -> tuple[str, str]:

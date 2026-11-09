@@ -8,12 +8,13 @@ from types import SimpleNamespace
 
 from openai import APIStatusError, RateLimitError
 
-from reo import config, providers, tools
+from reo import config, fastpath, providers, tools
 from reo.audio import looks_hallucinated
 from reo.audio import normalize as normalize_gain
 from reo.__main__ import EXIT_PHRASES
 from reo.text import is_speech, normalize
 from reo.brain import SYSTEM, Brain
+from reo.listen import Listener
 from reo.speak import VOICE_SETTINGS, split_emotion
 
 
@@ -617,6 +618,121 @@ class KeyFailover(unittest.TestCase):
         brain, _, _ = self._brain([_refusal(429), answer])
         brain._complete(with_tools=False)
         self.assertEqual(providers.active_label(), "m")
+
+
+class StickyLanguage(unittest.TestCase):
+    """Detecting the language costs about as much as the transcription, so it
+    is worth doing once rather than on every question."""
+
+    @staticmethod
+    def _listener(pinned=None):
+        listener = Listener.__new__(Listener)       # no model, no microphone
+        listener.language, listener.detected = pinned, False
+        listener.transcribe_seconds = 0.0
+        return listener
+
+    @staticmethod
+    def _info(language, probability):
+        return SimpleNamespace(language=language, language_probability=probability)
+
+    def test_a_confident_detection_is_kept(self):
+        listener = self._listener()
+        listener._remember_language(self._info("en", 0.97))
+        self.assertEqual(listener.language, "en")
+        self.assertTrue(listener.detected)
+
+    def test_a_shaky_detection_is_not_kept(self):
+        listener = self._listener()
+        listener._remember_language(self._info("cy", 0.41))
+        self.assertIsNone(listener.language)
+
+    def test_a_pinned_language_is_never_overwritten(self):
+        listener = self._listener(pinned="te")
+        listener._remember_language(self._info("en", 0.99))
+        self.assertEqual(listener.language, "te")
+
+    def test_a_guess_is_dropped_when_nothing_comes_back(self):
+        """Silence after a guess may mean the guess was wrong, so try again."""
+        listener = self._listener()
+        listener._remember_language(self._info("en", 0.99))
+        listener._forget_language()
+        self.assertIsNone(listener.language)
+        self.assertFalse(listener.detected)
+
+    def test_a_pinned_language_survives_a_bad_recording(self):
+        listener = self._listener(pinned="en")
+        listener._forget_language()
+        self.assertEqual(listener.language, "en")
+
+
+class ReasoningEffort(unittest.TestCase):
+    """Reo answers in one sentence; a reasoning model need not deliberate."""
+
+    def _kwargs(self, model):
+        sent = {}
+        brain = Brain.__new__(Brain)
+        brain.history = []
+
+        def create(**kwargs):
+            sent.update(kwargs)
+            return SimpleNamespace(choices=[])
+
+        client = SimpleNamespace(chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)))
+        provider = providers.Provider("p", "k", "https://p.invalid", model)
+        brain._ask(provider, client, with_tools=True)
+        return sent
+
+    def test_gpt_oss_is_asked_to_think_less(self):
+        self.assertEqual(self._kwargs("openai/gpt-oss-120b")["reasoning_effort"],
+                         config.REASONING_EFFORT)
+
+    def test_other_models_are_not_sent_an_unknown_parameter(self):
+        """Llama and Gemini reject it, and a 400 is not worth the saving."""
+        self.assertNotIn("reasoning_effort",
+                         self._kwargs("Llama-4-Maverick-17B-128E-Instruct-FP8"))
+
+
+class Contractions(unittest.TestCase):
+    """People say "what's", and the fast path was letting every one through."""
+
+    def test_an_apostrophe_does_not_split_a_word(self):
+        self.assertEqual(normalize("what's the battery"), "whats the battery")
+
+    def test_a_curly_apostrophe_too(self):
+        """Whisper prefers the typographic one."""
+        self.assertEqual(normalize("what’s the time"), "whats the time")
+
+    def test_contractions_reach_the_fast_path(self):
+        for said in ["what's the battery", "what’s the time", "what's the date",
+                     "what's my uptime", "what's the square root of 81"]:
+            with self.subTest(said=said):
+                self.assertIsNotNone(fastpath.answer(said))
+
+    def test_sentences_still_break_on_real_punctuation(self):
+        self.assertEqual(normalize(" Goodbye, Reo. "), "goodbye reo")
+
+
+class Echoes(unittest.TestCase):
+    """gpt-oss sometimes repeats the answer it has just given."""
+
+    def test_a_whole_reply_said_twice(self):
+        self.assertEqual(split_emotion("[neutral] Lima. Lima.")[1], "Lima.")
+
+    def test_a_bare_answer_tacked_on_the_end(self):
+        emotion, spoken = split_emotion(
+            "[neutral] The capital of Peru is Lima.[neutral] Lima.")
+        self.assertEqual(spoken, "The capital of Peru is Lima.")
+        self.assertEqual(emotion, "neutral")
+
+    def test_a_real_second_sentence_is_kept(self):
+        self.assertEqual(
+            split_emotion("[happy] I like Rome. Rome is warm.")[1],
+            "I like Rome. Rome is warm.")
+
+    def test_a_long_tail_is_not_treated_as_an_echo(self):
+        said = "It is raining. Raining hard enough to flood the road."
+        self.assertEqual(split_emotion("[sad] " + said)[1], said)
 
 
 if __name__ == "__main__":

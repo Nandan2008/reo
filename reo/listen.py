@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
@@ -6,12 +8,36 @@ from . import audio as au
 from . import config
 
 BLOCK_SECONDS = 0.1
+# Below this, Whisper is guessing at the language rather than recognising it,
+# so the guess is not worth keeping for the rest of the session.
+LANGUAGE_CONFIDENCE = 0.75
 
 
 class Listener:
     def __init__(self):
         print("Loading speech model (first run downloads it)...")
         self.model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
+        # None means "work it out from what you hear, once". Detection costs
+        # about as much again as the transcription itself - measured at 4.5s
+        # against 2.2s on the same three second clip - and paying that on every
+        # single utterance was the largest part of reo's lag.
+        self.language = config.LANGUAGE
+        self.detected = False
+        self.transcribe_seconds = 0.0    # what the last transcription cost
+        self._warm_up()
+
+    def _warm_up(self):
+        """Transcribe a moment of silence so the first real question does not
+        also pay for allocating the model's working memory."""
+        try:
+            t0 = time.time()
+            segments, _ = self.model.transcribe(
+                np.zeros(config.SAMPLE_RATE // 2, dtype=np.float32),
+                language=self.language or "en", beam_size=1)
+            list(segments)
+            print(f"Speech model ready ({time.time() - t0:.1f}s).")
+        except Exception as e:                      # never block startup on this
+            print(f"  [listen] warm-up skipped: {e}")
 
     def _record(self, stop_now=None):
         block = int(config.SAMPLE_RATE * BLOCK_SECONDS)
@@ -54,7 +80,36 @@ class Listener:
         audio = self._record(stop_now)
         if audio is None:
             return ""
-        segments, _ = self.model.transcribe(au.normalize(audio), language=config.LANGUAGE,
-                                            beam_size=1, vad_filter=True, **au.CAREFUL)
+
+        started = time.time()
+        segments, info = self.model.transcribe(
+            au.normalize(audio), language=self.language, beam_size=1,
+            vad_filter=True, **au.CAREFUL)
         text = " ".join(s.text for s in segments).strip()
-        return "" if au.looks_hallucinated(text) else text
+        self.transcribe_seconds = time.time() - started
+
+        if au.looks_hallucinated(text):
+            text = ""
+        if not text:
+            # Nothing usable came back. If the language was a guess, it may have
+            # been the wrong guess, so let the next utterance decide again.
+            self._forget_language()
+            return ""
+
+        self._remember_language(info)
+        return text
+
+    def _remember_language(self, info) -> None:
+        """Keep a confident detection and stop paying for it every time."""
+        if self.language is not None:
+            return
+        language = getattr(info, "language", None)
+        confidence = getattr(info, "language_probability", 0.0) or 0.0
+        if language and confidence >= LANGUAGE_CONFIDENCE:
+            self.language, self.detected = language, True
+            print(f"  [listen] language is {language} ({confidence:.0%}); "
+                  f"reusing it, which saves about a second per question")
+
+    def _forget_language(self) -> None:
+        if self.detected:
+            self.language, self.detected = None, False

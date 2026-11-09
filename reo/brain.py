@@ -64,6 +64,12 @@ class Brain:
         )
         if with_tools:
             kwargs.update(tools=OPENAI_TOOLS, tool_choice="auto")
+        # gpt-oss reasons before it answers, and reo answers in one sentence.
+        # Measured over three questions: 104 output tokens on the default
+        # against 37 on "low", for the same answers. Same wall time, but a
+        # third of the budget against an 8000 token minute.
+        if "gpt-oss" in provider.model and config.REASONING_EFFORT:
+            kwargs["reasoning_effort"] = config.REASONING_EFFORT
         try:
             response = client.chat.completions.create(**kwargs)
         except BadRequestError as e:

@@ -79,7 +79,16 @@ def woken_by() -> str:
     return config.WAKE_NAME
 
 
-def handle(brain, text: str, ui=None, heard_in: float = 0.0) -> bool:
+def _heard_detail(heard_in: float, listener) -> str:
+    """Recording and transcribing in one line. They are both inside "heard",
+    and only one of them is reo's fault."""
+    stt = getattr(listener, "transcribe_seconds", 0.0)
+    if not stt:
+        return f"heard {heard_in:.1f}s"
+    return f"heard {heard_in:.1f}s (you {max(heard_in - stt, 0.0):.1f}s + stt {stt:.1f}s)"
+
+
+def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None) -> bool:
     """Answer one command. Returns False when it is time to stop."""
     print(f"You: {text}")
     if ui:
@@ -102,8 +111,8 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0) -> bool:
         brain.history.append({"role": "assistant", "content": quick})
         spoke = time.time() - started
         stats.add_reply(heard_in, 0.0, spoke, used_model=False)
-        print(f"  [time] heard {heard_in:.1f}s  answered directly (no model)  "
-              f"spoke {spoke:.1f}s")
+        print(f"  [time] {_heard_detail(heard_in, listener)}  "
+              f"answered directly (no model)  spoke {spoke:.1f}s")
         return True
 
     if ui:
@@ -125,7 +134,8 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0) -> bool:
     # instead of guessed at.
     stats.add_reply(heard_in, thought, spoke)
     calls = sum(1 for m in brain.history if m.get("role") == "tool")
-    print(f"  [time] heard {heard_in:.1f}s  thought {thought:.1f}s ({calls} tools)  "
+    print(f"  [time] {_heard_detail(heard_in, listener)}  "
+          f"thought {thought:.1f}s ({calls} tools)  "
           f"spoke {spoke:.1f}s  total {heard_in + thought + spoke:.1f}s")
     return True
 
@@ -232,7 +242,7 @@ def _loop(listener, brain, waker, toggle, combination, ui):
                 ui.line("note", "(didn't catch that)")
             continue
 
-        if not handle(brain, text, ui, heard_in):
+        if not handle(brain, text, ui, heard_in, listener):
             break
 
 
