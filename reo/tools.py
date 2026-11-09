@@ -42,6 +42,31 @@ def open_website(url: str) -> str:
 _searcher = None
 _search_cache = {}
 
+# Wikipedia refuses a request that will not say who it is, and reo was getting
+# a flat 403 from the best reference on the web. Their policy asks for a
+# descriptive agent, so give one rather than dressing up as somebody's browser.
+AGENT = "reo-voice-assistant/1.0 (open-source personal voice assistant)"
+
+
+def _client(timeout: int = 15):
+    import primp
+    return primp.Client(timeout=timeout, headers={"User-Agent": AGENT})
+
+
+def warm_up() -> None:
+    """Build the search client before anyone asks for it.
+
+    The first search of a session took 5.3s against 1.4s for the next, and all
+    of that difference was construction. Called on a background thread at
+    startup, it is paid while the speech model is still loading.
+    """
+    global _searcher
+    try:
+        from ddgs import DDGS
+        _searcher = DDGS()
+    except Exception as e:
+        print(f"  [search] warm-up skipped: {e}")
+
 
 def search_web(query: str) -> str:
     """Look something up and hand the text back, so reo can answer out loud."""
@@ -74,8 +99,7 @@ def read_page(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     try:
-        import primp
-        response = primp.Client(timeout=15).get(url)
+        response = _client().get(url)
         if response.status_code >= 400:
             return f"{url} returned HTTP {response.status_code}."
         text = " ".join((response.text_plain or "").split())
@@ -84,6 +108,64 @@ def read_page(url: str) -> str:
     if not text:
         return f"{url} had no readable text."
     return text[:PAGE_LIMIT] + (" ...(truncated)" if len(text) > PAGE_LIMIT else "")
+
+
+WIKI_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/"
+WIKI_SEARCH = ("https://en.wikipedia.org/w/api.php?action=query&list=search"
+               "&format=json&srlimit=4&srsearch=")
+
+
+def look_up(topic: str) -> str:
+    """Wikipedia, through its own API rather than by scraping the page.
+
+    Faster than a search and a page read together - about 0.3s - and it comes
+    back as a written summary instead of navigation furniture.
+    """
+    import json as _json
+
+    def summary(title: str):
+        response = _client(10).get(WIKI_SUMMARY + urllib.parse.quote(title.replace(" ", "_")))
+        if response.status_code != 200:
+            return None
+        return _json.loads(response.text)
+
+    page = summary(topic)
+    # No exact title, or a title that only lists the possibilities: ask
+    # Wikipedia which article was meant. The first hit for an ambiguous word is
+    # usually the disambiguation page itself, so skip anything that leads back
+    # where we started - "Mercury" has to reach the planet, not the list.
+    if page is None or page.get("type") == "disambiguation":
+        rejected = (page or {}).get("title", "").lower()
+        try:
+            found = _json.loads(_client(10).get(WIKI_SEARCH + urllib.parse.quote(topic)).text)
+            hits = found.get("query", {}).get("search", [])
+        except Exception:
+            hits = []
+        for hit in hits:
+            if hit["title"].lower() == rejected:
+                continue
+            candidate = summary(hit["title"])
+            if candidate and candidate.get("type") != "disambiguation"                     and candidate.get("extract"):
+                page = candidate
+                break
+    if not page or not page.get("extract") or page.get("type") == "disambiguation":
+        return f"Wikipedia has no single article on {topic}."
+    return f"{page.get('title', topic)}: {page['extract']}"
+
+
+def remember(fact: str) -> str:
+    from .memory import memory
+    return memory.remember(fact)
+
+
+def forget(about: str) -> str:
+    from .memory import memory
+    return memory.forget(about)
+
+
+def recall(about: str = "") -> str:
+    from .memory import memory
+    return memory.recall(about)
 
 
 def open_search(query: str) -> str:
@@ -128,6 +210,10 @@ FUNCTIONS = {
     "list_apps": list_apps,
     "open_website": open_website,
     "search_web": search_web,
+    "look_up": look_up,
+    "remember": remember,
+    "forget": forget,
+    "recall": recall,
     "open_search": open_search,
     "read_page": read_page,
     "run_command": run_command,
@@ -232,6 +318,42 @@ TOOLS = [
             "type": "object",
             "properties": {"url": {"type": "string", "description": "Full URL to read"}},
             "required": ["url"],
+        },
+    },
+    {
+        "name": "look_up",
+        "description": "Wikipedia. Prefer over search_web for facts that do not change.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"topic": {"type": "string"}},
+            "required": ["topic"],
+        },
+    },
+    {
+        "name": "remember",
+        "description": "Store a fact about the user for next time.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"fact": {"type": "string"}},
+            "required": ["fact"],
+        },
+    },
+    {
+        "name": "recall",
+        "description": ("Only for a fact NOT in the remembered list you were already given. Never for one that is."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"about": {"type": "string"}},
+            "required": ["about"],
+        },
+    },
+    {
+        "name": "forget",
+        "description": "Drop remembered facts matching this.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"about": {"type": "string"}},
+            "required": ["about"],
         },
     },
     {

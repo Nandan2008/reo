@@ -5,6 +5,7 @@ from openai import (APIConnectionError, APIStatusError, APITimeoutError,
                     BadRequestError, OpenAI, RateLimitError)
 
 from . import config, providers
+from .memory import memory
 from .stats import session
 from .tools import TOOLS, run_tool
 
@@ -23,7 +24,10 @@ SYSTEM = (
     "Call tools without asking permission first; the result says if something "
     "needs confirming. Trust what a tool told you even if the user pushes back. "
     "Search when an answer could have changed, never putting a remembered year in "
-    "the query, and read_page a result when the snippets fall short."
+    "the query, and read_page a result when the snippets fall short. Use look_up "
+    "for facts that do not change. "
+    "Call remember when the user tells you something about themselves worth "
+    "knowing next time; do not announce that you did."
 )
 
 # Convert our tool specs to the OpenAI-compatible format
@@ -56,9 +60,14 @@ class Brain:
         expose (notably 'refuse' when declining), which the server rejects with a
         400. Answering without tools lets it say its piece instead of crashing."""
         today = datetime.now().strftime("%A, %d %B %Y")
+        # Facts about this user travel with every request, so reo knows them
+        # rather than having to go and ask. Capped in memory.py: this is resent
+        # each time and the free tier counts every token.
+        known = memory.for_prompt()
         kwargs = dict(
             model=provider.model,
-            messages=[{"role": "system", "content": f"{SYSTEM} Today is {today}."}] + self.history,
+            messages=[{"role": "system",
+                       "content": f"{SYSTEM} Today is {today}.{known}"}] + self.history,
             max_tokens=500,
             temperature=0.3,
         )

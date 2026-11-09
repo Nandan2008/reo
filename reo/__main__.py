@@ -3,11 +3,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import threading
+
 from . import config, fastpath, providers
 from .stats import session as stats
 from .brain import Brain
 from .listen import Listener
 from .speak import speak
+from . import tools
 from .text import is_speech, normalize
 
 EXIT_PHRASES = {"goodbye", "bye", "exit", "quit", "stop listening", "goodbye reo", "bye reo"}
@@ -160,6 +163,10 @@ def main():
         print("Two copies fight over the microphone and the speaker, which looks")
         print("exactly like reo being slow or frozen.")
         return
+
+    # The first search of a session cost 5.3s against 1.4s for the next, all
+    # of it building the client. Do it here, while the speech model loads.
+    threading.Thread(target=tools.warm_up, daemon=True).start()
 
     listener, brain = Listener(), Brain()
 

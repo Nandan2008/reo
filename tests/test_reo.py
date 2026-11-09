@@ -1,6 +1,10 @@
 """Offline tests: no microphone, no API key, no network."""
 import re
+import shutil
+import tempfile
 import unittest
+import urllib.parse
+from pathlib import Path
 
 import numpy as np
 
@@ -9,6 +13,8 @@ from types import SimpleNamespace
 from openai import APIStatusError, RateLimitError
 
 from reo import config, fastpath, providers, tools
+from reo import memory as memory_module
+from reo.memory import Memory
 from reo.audio import looks_hallucinated
 from reo.audio import normalize as normalize_gain
 from reo.__main__ import EXIT_PHRASES
@@ -733,6 +739,151 @@ class Echoes(unittest.TestCase):
     def test_a_long_tail_is_not_treated_as_an_echo(self):
         said = "It is raining. Raining hard enough to flood the road."
         self.assertEqual(split_emotion("[sad] " + said)[1], said)
+
+
+class Remembering(unittest.TestCase):
+    """Reo used to forget everything the moment it closed."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = Path(self.dir) / "memory.json"
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _memory(self):
+        return Memory(self.path)
+
+    def test_a_fact_survives_a_restart(self):
+        self._memory().remember("His name is Nandan.")
+        self.assertIn("Nandan", self._memory().recall())
+
+    def test_the_same_fact_is_not_stored_twice(self):
+        m = self._memory()
+        m.remember("His name is Nandan.")
+        m.remember("his name is nandan")
+        self.assertEqual(len(m.facts), 1)
+
+    def test_forgetting_matches_on_content(self):
+        m = self._memory()
+        m.remember("He lives in Hyderabad.")
+        m.remember("His name is Nandan.")
+        m.forget("hyderabad")
+        self.assertEqual([f["text"] for f in m.facts], ["His name is Nandan."])
+
+    def test_forgetting_something_unknown_says_so(self):
+        self.assertIn("Nothing remembered", self._memory().forget("quantum mechanics"))
+
+    def test_an_empty_memory_adds_nothing_to_the_prompt(self):
+        self.assertEqual(self._memory().for_prompt(), "")
+
+    def test_the_prompt_carries_the_facts(self):
+        m = self._memory()
+        m.remember("He prefers short answers.")
+        self.assertIn("He prefers short answers.", m.for_prompt())
+
+    def test_only_so_many_facts_ride_along(self):
+        """Every one is resent on every request, against an 8000 token minute."""
+        m = self._memory()
+        for i in range(memory_module.CARRY + 15):
+            m.remember(f"Fact number {i}.")
+        self.assertEqual(m.for_prompt().count(";"), memory_module.CARRY - 1)
+
+    def test_the_file_is_capped(self):
+        m = self._memory()
+        for i in range(memory_module.KEEP + 20):
+            m.remember(f"Fact number {i}.")
+        self.assertEqual(len(self._memory().facts), memory_module.KEEP)
+
+    def test_a_corrupt_file_is_not_fatal(self):
+        self.path.write_text("{ this is not json", encoding="utf-8")
+        self.assertEqual(self._memory().facts, [])
+
+    def test_a_blank_fact_is_refused(self):
+        m = self._memory()
+        m.remember("   ")
+        self.assertEqual(m.facts, [])
+
+
+class _Page:
+    def __init__(self, status, body):
+        self.status_code, self.text = status, body
+
+
+class WikipediaLookups(unittest.TestCase):
+    """An ambiguous word has to reach the article, not the list of articles."""
+
+    def _stub(self, pages, hits):
+        import json as _json
+
+        def client(timeout=15):
+            def get(url):
+                if "list=search" in url:
+                    return _Page(200, _json.dumps(
+                        {"query": {"search": [{"title": h} for h in hits]}}))
+                title = urllib.parse.unquote(url.rsplit("/", 1)[-1]).replace("_", " ")
+                page = pages.get(title)
+                return _Page(200, _json.dumps(page)) if page else _Page(404, "")
+            return SimpleNamespace(get=get)
+        return client
+
+    def _look_up(self, topic, pages, hits):
+        original = tools._client
+        tools._client = self._stub(pages, hits)
+        try:
+            return tools.look_up(topic)
+        finally:
+            tools._client = original
+
+    def test_a_plain_article_comes_straight_back(self):
+        pages = {"Hyderabad": {"title": "Hyderabad", "extract": "A city in Telangana."}}
+        self.assertEqual(self._look_up("Hyderabad", pages, []),
+                         "Hyderabad: A city in Telangana.")
+
+    def test_a_disambiguation_page_is_stepped_over(self):
+        pages = {
+            "Mercury": {"title": "Mercury", "type": "disambiguation",
+                        "extract": "Mercury may refer to:"},
+            "Mercury (planet)": {"title": "Mercury (planet)",
+                                 "extract": "The first planet from the Sun."},
+        }
+        answer = self._look_up("Mercury", pages, ["Mercury", "Mercury (planet)"])
+        self.assertEqual(answer, "Mercury (planet): The first planet from the Sun.")
+
+    def test_a_missing_title_is_searched_for(self):
+        pages = {"Transformer (deep learning)":
+                 {"title": "Transformer (deep learning)", "extract": "An architecture."}}
+        answer = self._look_up("transformer neural net", pages,
+                               ["Transformer (deep learning)"])
+        self.assertIn("An architecture.", answer)
+
+    def test_nothing_found_says_so_rather_than_crashing(self):
+        self.assertIn("no single article", self._look_up("zzz nonsense", {}, []))
+
+    def test_only_disambiguation_pages_still_says_so(self):
+        pages = {"Mercury": {"title": "Mercury", "type": "disambiguation",
+                             "extract": "Mercury may refer to:"}}
+        self.assertIn("no single article", self._look_up("Mercury", pages, ["Mercury"]))
+
+
+class ToolTable(unittest.TestCase):
+    """A tool the model is offered but cannot call is a silent dead end."""
+
+    def test_every_offered_tool_can_be_run(self):
+        for spec in tools.TOOLS:
+            with self.subTest(tool=spec["name"]):
+                self.assertIn(spec["name"], tools.FUNCTIONS)
+
+    def test_every_runnable_tool_is_offered(self):
+        offered = {spec["name"] for spec in tools.TOOLS}
+        for name in tools.FUNCTIONS:
+            with self.subTest(tool=name):
+                self.assertIn(name, offered)
+
+    def test_each_tool_is_described(self):
+        for spec in tools.TOOLS:
+            with self.subTest(tool=spec["name"]):
+                self.assertTrue(spec.get("description", "").strip())
 
 
 if __name__ == "__main__":
