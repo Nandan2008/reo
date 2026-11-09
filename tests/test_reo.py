@@ -4,7 +4,11 @@ import unittest
 
 import numpy as np
 
-from reo import config, tools
+from types import SimpleNamespace
+
+from openai import APIStatusError, RateLimitError
+
+from reo import config, providers, tools
 from reo.audio import looks_hallucinated
 from reo.audio import normalize as normalize_gain
 from reo.__main__ import EXIT_PHRASES
@@ -454,6 +458,165 @@ class HistoryTrimming(unittest.TestCase):
 
     def test_short_history_untouched(self):
         self.assertEqual(len(self._trimmed(1)), 4)
+
+
+class ProviderPool(unittest.TestCase):
+    """More than one key is the answer to a per-minute token limit."""
+
+    ENV = {
+        "LLM_API_KEY": "groq-one",
+        "LLM_BASE_URL": "https://api.groq.com/openai/v1",
+        "LLM_MODEL": "openai/gpt-oss-120b",
+        "LLM_API_KEYS": "groq-two, groq-three",
+        "LLAMA_API_KEY": "llama-one",
+        "OPENROUTER_API_KEY": "",
+    }
+
+    def test_configured_key_goes_first(self):
+        found = providers.build(self.ENV)
+        self.assertEqual(found[0].key, "groq-one")
+        self.assertEqual(found[0].model, "openai/gpt-oss-120b")
+
+    def test_spares_share_the_service(self):
+        found = providers.build(self.ENV)
+        spares = [p for p in found if p.key.startswith("groq-")]
+        self.assertEqual([p.key for p in spares], ["groq-one", "groq-two", "groq-three"])
+        self.assertEqual({p.base_url for p in spares}, {self.ENV["LLM_BASE_URL"]})
+
+    def test_known_providers_come_after(self):
+        found = providers.build(self.ENV)
+        self.assertEqual(found[-1].name, "llama")
+        self.assertIn("api.llama.com", found[-1].base_url)
+
+    def test_blank_keys_are_not_providers(self):
+        names = [p.name for p in providers.build(self.ENV)]
+        self.assertNotIn("openrouter", names)
+
+    def test_the_same_key_is_not_listed_twice(self):
+        env = dict(self.ENV, GROQ_API_KEY="groq-one")   # same key, known slot
+        keys = [p.key for p in providers.build(env)]
+        self.assertEqual(len(keys), len(set(keys)))
+
+    def test_no_keys_means_no_providers(self):
+        self.assertEqual(providers.build({"LLM_API_KEY": ""}), [])
+
+    def test_a_benched_key_is_skipped(self):
+        pool = providers.Pool(providers.build(self.ENV))
+        self.assertEqual(pool.current()[0], 0)
+        pool.bench(0)
+        self.assertEqual(pool.current()[0], 1)
+        self.assertEqual(pool.free(), len(pool) - 1)
+
+    def test_a_bench_expires(self):
+        pool = providers.Pool(providers.build(self.ENV))
+        pool.bench(0, seconds=-1)        # already served its minute
+        self.assertEqual(pool.current()[0], 0)
+
+    def test_all_benched_still_offers_the_soonest(self):
+        """The cooldown is a guess, so refusing to answer would be worse."""
+        pool = providers.Pool(providers.build(self.ENV))
+        for i in range(len(pool)):
+            pool.bench(i, seconds=100 - i)
+        self.assertEqual(pool.current()[0], len(pool) - 1)
+        self.assertEqual(pool.free(), 0)
+
+    def test_the_voice_stays_with_groq(self):
+        """Orpheus is hosted by Groq alone, whatever is doing the thinking."""
+        env = {"LLM_API_KEY": "llama-key", "LLM_BASE_URL": "https://api.llama.com/compat/v1",
+               "GROQ_API_KEY": "groq-key"}
+        host = providers.hosting("canopylabs/orpheus-v1-english", env)
+        self.assertEqual(host.key, "groq-key")
+
+    def test_no_groq_key_means_no_orpheus(self):
+        env = {"LLM_API_KEY": "llama-key", "LLM_BASE_URL": "https://api.llama.com/compat/v1"}
+        self.assertIsNone(providers.hosting("canopylabs/orpheus-v1-english", env))
+
+
+def _refusal(status):
+    """An openai error with a given status, built without a real HTTP round trip.
+    A SimpleNamespace is enough: the client only reads these three attributes."""
+    response = SimpleNamespace(status_code=status, request=SimpleNamespace(), headers={})
+    kind = RateLimitError if status == 429 else APIStatusError
+    return kind("busy", response=response, body=None)
+
+
+class _Client:
+    """Stands in for an OpenAI client: does whatever the test tells it to."""
+
+    def __init__(self, outcome):
+        self.calls = 0
+
+        def create(**kwargs):
+            self.calls += 1
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+
+
+class KeyFailover(unittest.TestCase):
+    """A spent key should cost a retry, not an apology out loud."""
+
+    def _brain(self, outcomes):
+        pool = providers.Pool([
+            providers.Provider(f"p{i}", f"k{i}", f"https://p{i}.invalid", "m")
+            for i in range(len(outcomes))
+        ])
+        brain = Brain.__new__(Brain)
+        brain.history = [{"role": "user", "content": "hello"}]
+        brain.pool = pool
+        clients = [_Client(o) for o in outcomes]
+        brain._clients = dict(enumerate(clients))
+        brain._client = lambda index, provider: clients[index]
+        return brain, pool, clients
+
+    def test_a_rate_limit_moves_to_the_next_key(self):
+        answer = SimpleNamespace(choices=[])
+        brain, pool, clients = self._brain([_refusal(429), answer])
+        self.assertIs(brain._complete(with_tools=False), answer)
+        self.assertEqual([c.calls for c in clients], [1, 1])
+        self.assertTrue(pool.benched(0))
+
+    def test_the_spent_key_is_not_asked_again(self):
+        answer = SimpleNamespace(choices=[])
+        brain, pool, clients = self._brain([_refusal(429), answer])
+        brain._complete(with_tools=False)
+        brain._complete(with_tools=False)
+        self.assertEqual(clients[0].calls, 1)      # benched, so skipped
+        self.assertEqual(clients[1].calls, 2)
+
+    def test_every_key_refusing_raises(self):
+        brain, _, clients = self._brain([_refusal(429), _refusal(429)])
+        with self.assertRaises(RuntimeError):
+            brain._complete(with_tools=False)
+        self.assertEqual([c.calls for c in clients], [1, 1])
+
+    def test_our_own_bad_request_is_not_retried_elsewhere(self):
+        """A 400 fails identically on every key; spending them all hides the bug."""
+        brain, _, clients = self._brain([_refusal(400), SimpleNamespace(choices=[])])
+        with self.assertRaises(APIStatusError):
+            brain._complete(with_tools=False)
+        self.assertEqual(clients[1].calls, 0)
+
+    def test_a_server_error_tries_the_next_key(self):
+        answer = SimpleNamespace(choices=[])
+        brain, _, clients = self._brain([_refusal(503), answer])
+        self.assertIs(brain._complete(with_tools=False), answer)
+        self.assertEqual(clients[1].calls, 1)
+
+    def test_no_keys_at_all_says_so(self):
+        brain = Brain.__new__(Brain)
+        brain.pool = providers.Pool([])
+        brain.history = []
+        with self.assertRaises(RuntimeError):
+            brain._complete(with_tools=False)
+
+    def test_the_window_names_whoever_answered(self):
+        answer = SimpleNamespace(choices=[])
+        brain, _, _ = self._brain([_refusal(429), answer])
+        brain._complete(with_tools=False)
+        self.assertEqual(providers.active_label(), "m")
 
 
 if __name__ == "__main__":

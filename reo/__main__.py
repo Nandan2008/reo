@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, fastpath
+from . import config, fastpath, providers
 from .stats import session as stats
 from .brain import Brain
 from .listen import Listener
@@ -135,9 +135,14 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     _tee_to_logfile()
 
-    if not config.LLM_API_KEY or config.LLM_API_KEY == "your-groq-key-here":
-        print("Missing LLM_API_KEY. Copy .env.example to .env and add your free Groq key.")
+    keys = [p for p in providers.build() if p.key != "your-groq-key-here"]
+    if not keys:
+        print("No model key. Copy .env.example to .env and add a free key, or run set-key.ps1.")
         return
+    if len(keys) > 1:
+        names = ", ".join(f"{p.name} ({p.label})" for p in keys)
+        print(f"{len(keys)} keys: {names}")
+        print("A key that hits its rate limit is benched for a minute and the next one answers.")
 
     other = already_running()
     if other:

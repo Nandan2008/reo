@@ -86,7 +86,14 @@ def _speak_pyttsx3(text: str, emotion: str) -> None:
 def _speak_orpheus(text: str) -> None:
     from openai import OpenAI
 
-    client = OpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL,
+    from . import providers
+
+    # Orpheus is hosted by Groq alone, so the voice needs the Groq key even when
+    # the thinking has moved to another provider.
+    voice_host = providers.hosting(config.TTS_MODEL)
+    if voice_host is None:
+        raise RuntimeError("Orpheus needs a Groq key; set REO_TTS=pyttsx3 or add one.")
+    client = OpenAI(api_key=voice_host.key, base_url=voice_host.base_url,
                     timeout=config.REQUEST_TIMEOUT, max_retries=1)
     response = client.audio.speech.create(
         model=config.TTS_MODEL,

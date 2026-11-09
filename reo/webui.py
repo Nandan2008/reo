@@ -14,7 +14,7 @@ from pathlib import Path
 
 import webview
 
-from . import config
+from . import providers
 from .stats import session as stats
 
 PAGE = Path(__file__).resolve().parent / "hud" / "index.html"
@@ -102,7 +102,13 @@ def _device():
             rows.append(["PWR", f"{battery.percent:.0f}%", battery.percent])
         else:
             rows.append(["PWR", "AC"])
-        rows.append(["MODEL", config.LLM_MODEL.split("/")[-1]])
+        # The provider that last answered, not whatever .env says: reo falls
+        # over to a second key when the first hits its limit, and the panel
+        # should name whoever is actually speaking.
+        rows.append(["MODEL", providers.active_label()])
+        keys = providers.pool()
+        if len(keys) > 1:
+            rows.append(["KEYS", f"{keys.free()}/{len(keys)}"])
         return rows
     except Exception:
         return [["CPU", "--"], ["MEM", "--"], ["PWR", "--"]]
