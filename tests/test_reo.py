@@ -2,6 +2,7 @@
 import re
 import shutil
 import tempfile
+import time
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -14,6 +15,7 @@ from openai import APIStatusError, RateLimitError
 from reo import config, fastpath, providers, tools
 from reo import memory as memory_module
 from reo import pointer
+from reo import system as reo_system
 from reo.memory import Memory
 from reo.audio import has_speech, looks_hallucinated
 from reo.audio import normalize as normalize_gain
@@ -1268,6 +1270,171 @@ class SilentSegments(unittest.TestCase):
     def test_confident_speech_is_kept(self):
         listener = self._listener([self._segment(" Play the first video", 0.02)])
         self.assertEqual(listener.listen(), "Play the first video")
+
+
+class Endpointing(unittest.TestCase):
+    """Cutting a sentence in half and transcribing the first part alone is
+    where "Abad" came from - the tail of Hyderabad arriving by itself."""
+
+    def test_the_key_gets_a_long_safety_net(self):
+        """His own sample has a 2.6s gap in the middle of one sentence."""
+        self.assertGreaterEqual(config.HOTKEY_SILENCE_SECONDS, 2.6)
+
+    def test_without_a_key_silence_still_ends_it(self):
+        """Nothing else is going to, so it has to stay short."""
+        self.assertLess(config.SILENCE_SECONDS, 1.5)
+
+    def _blocks_before_stopping(self, stop_now):
+        """How many blocks of pure silence _record tolerates after speech."""
+        import sounddevice as sd
+        loud = np.full((1600, 1), 0.3, dtype=np.float32)
+        quiet = np.zeros((1600, 1), dtype=np.float32)
+        reads = []
+
+        class Stream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+            def read(self, n):
+                reads.append(1)
+                return (loud if len(reads) <= 3 else quiet), False
+
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.transcribe_seconds = 0.0
+        with mock.patch.object(sd, "InputStream", lambda **kw: Stream()):
+            listener._record(stop_now=stop_now)
+        return len(reads)
+
+    def test_a_pause_survives_when_a_key_will_end_it(self):
+        with_key = self._blocks_before_stopping(stop_now=lambda: False)
+        without = self._blocks_before_stopping(stop_now=None)
+        self.assertGreater(with_key, without)
+
+
+class ParallelTools(unittest.TestCase):
+    """Several searches in one reply took a second or two each, one after
+    another. Looking things up can happen at once; pressing keys cannot."""
+
+    def _run(self, names):
+        order, started = [], []
+        brain = Brain.__new__(Brain)
+        brain.history = []
+        brain.pool = providers.Pool([providers.Provider("p", "k", "https://p.invalid", "m")])
+        brain._clients = {}
+
+        calls = [SimpleNamespace(id=f"c{i}", function=SimpleNamespace(
+            name=n, arguments="{}")) for i, n in enumerate(names)]
+        replies = iter([(calls, ""), (None, "[neutral] Done.")])
+
+        def complete(with_tools):
+            c, content = next(replies)
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(tool_calls=c, content=content),
+                finish_reason="stop")])
+
+        brain._complete = complete
+
+        import reo.brain as brainmod
+        import threading
+        lock = threading.Lock()
+        overlap = {"seen": False}
+
+        def fake(name, args):
+            with lock:
+                started.append(name)
+                if len(started) - len(order) > 1:
+                    overlap["seen"] = True
+            time.sleep(0.12)
+            with lock:
+                order.append(name)
+            return "ok " + name
+
+        with mock.patch.object(brainmod, "run_tool", fake):
+            t0 = time.time()
+            brain.think("go")
+            elapsed = time.time() - t0
+        return order, elapsed, overlap["seen"], brain
+
+    def test_lookups_run_at_the_same_time(self):
+        order, elapsed, overlapped, _ = self._run(["search_web", "look_up", "read_page"])
+        self.assertTrue(overlapped)
+        self.assertLess(elapsed, 0.30)          # not 3 x 0.12 end to end
+
+    def test_anything_that_acts_runs_in_order(self):
+        """press_key then type_text has to happen in that order or it is wrong."""
+        order, elapsed, overlapped, _ = self._run(["press_key", "type_text"])
+        self.assertFalse(overlapped)
+        self.assertEqual(order, ["press_key", "type_text"])
+
+    def test_one_action_among_lookups_makes_the_whole_batch_wait(self):
+        order, _, overlapped, _ = self._run(["search_web", "press_key", "look_up"])
+        self.assertFalse(overlapped)
+        self.assertEqual(order, ["search_web", "press_key", "look_up"])
+
+    def test_results_stay_paired_with_their_calls(self):
+        _, _, _, brain = self._run(["search_web", "look_up", "read_page"])
+        pairs = {m["tool_call_id"]: m["content"]
+                 for m in brain.history if m.get("role") == "tool"}
+        self.assertEqual(pairs, {"c0": "ok search_web", "c1": "ok look_up",
+                                 "c2": "ok read_page"})
+
+
+class SystemControls(unittest.TestCase):
+    """Volume and media are not characters, so SendKeys cannot reach them."""
+
+    def _fake(self):
+        taps = []
+        return taps, SimpleNamespace(
+            keybd_event=lambda code, a, flags, b: taps.append((code, flags)),
+            GetForegroundWindow=lambda: 1234,
+            GetWindowTextLengthW=lambda h: 7,
+            GetWindowTextW=lambda h, buf, n: buf.__setitem__(slice(0, 7), "Notepad"),
+            ShowWindow=lambda h, cmd: taps.append(("show", cmd)),
+            PostMessageW=lambda h, msg, a, b: taps.append(("post", msg)),
+            LockWorkStation=lambda: taps.append(("lock", 0)),
+        )
+
+    def test_volume_repeats_because_windows_moves_two_notches(self):
+        taps, fake = self._fake()
+        with mock.patch.object(reo_system, "_user32", lambda: fake):
+            said = reo_system.control("volume_up")
+        self.assertEqual(len([t for t in taps if t[0] == 0xAF and t[1] == 0]), 5)
+        self.assertIn("up", said)
+
+    def test_an_amount_overrides_the_default(self):
+        taps, fake = self._fake()
+        with mock.patch.object(reo_system, "_user32", lambda: fake):
+            reo_system.control("volume_down", 2)
+        self.assertEqual(len([t for t in taps if t[0] == 0xAE and t[1] == 0]), 2)
+
+    def test_media_keys_fire_once(self):
+        taps, fake = self._fake()
+        with mock.patch.object(reo_system, "_user32", lambda: fake):
+            reo_system.control("play_pause")
+        self.assertEqual(len([t for t in taps if t[0] == 0xB3 and t[1] == 0]), 1)
+
+    def test_spoken_wording_is_accepted(self):
+        taps, fake = self._fake()
+        with mock.patch.object(reo_system, "_user32", lambda: fake):
+            self.assertIn("up", reo_system.control("Volume Up"))
+            self.assertIn("up", reo_system.control("volume-up"))
+
+    def test_closing_asks_the_program_rather_than_killing_it(self):
+        """WM_CLOSE lets it prompt about unsaved work."""
+        taps, fake = self._fake()
+        with mock.patch.object(reo_system, "_user32", lambda: fake):
+            said = reo_system.control("close_window")
+        self.assertIn(("post", 0x0010), taps)
+        self.assertIn("Notepad", said)
+
+    def test_an_unknown_control_lists_the_real_ones(self):
+        said = reo_system.control("make me a sandwich")
+        self.assertIn("No such control", said)
+        self.assertIn("volume_up", said)
+
+    def test_it_is_reachable_as_a_tool(self):
+        self.assertIn("control_system", tools.FUNCTIONS)
 
 
 if __name__ == "__main__":

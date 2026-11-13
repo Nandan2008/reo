@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from openai import (APIConnectionError, APIStatusError, APITimeoutError,
@@ -7,7 +8,7 @@ from openai import (APIConnectionError, APIStatusError, APITimeoutError,
 from . import config, providers
 from .memory import memory
 from .stats import session
-from .tools import TOOLS, run_tool
+from .tools import READ_ONLY, TOOLS, run_tool
 
 SYSTEM = (
     # Every word here is resent on every request, and the free tier allows
@@ -196,16 +197,34 @@ class Brain:
                     ],
                 })
                 session.add_tools(len(runnable))
+                wanted = []
                 for tc in runnable:
                     try:
                         args = json.loads(tc.function.arguments or "{}")
                     except json.JSONDecodeError:
                         args = {}
                     print(f"  [tool] {tc.function.name}({args})")
+                    wanted.append((tc, args))
+
+                # Searches take a second or two each and the model often asks
+                # for several at once. Looking things up can happen at the same
+                # time; pressing keys and moving windows cannot, because the
+                # order is the point. So: all-or-nothing, and only when every
+                # call in the batch is a lookup.
+                together = len(wanted) > 1 and all(
+                    tc.function.name in READ_ONLY for tc, _ in wanted)
+                if together:
+                    with ThreadPoolExecutor(max_workers=len(wanted)) as pool:
+                        results = list(pool.map(
+                            lambda job: run_tool(job[0].function.name, job[1]), wanted))
+                else:
+                    results = [run_tool(tc.function.name, args) for tc, args in wanted]
+
+                for (tc, _), result in zip(wanted, results):
                     self.history.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": run_tool(tc.function.name, args),
+                        "content": result,
                     })
             return "Sorry, that took too many steps."
         except Exception:

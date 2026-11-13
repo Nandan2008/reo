@@ -59,6 +59,13 @@ NO_SPEECH_PROB = float(os.getenv("REO_NO_SPEECH_PROB", "0.6"))
 # which reo had already stopped listening and transcribed the first half alone.
 # That is where "Abad" came from - the tail of Hyderabad, arriving by itself.
 SILENCE_SECONDS = float(os.getenv("REO_SILENCE_SECONDS", "0.9"))
+# When a key ends the recording, silence is only a safety net, so it can be
+# generous. His own six second sample has a 2.6s gap in the middle of it, and
+# anything shorter than that chops a sentence in half and transcribes the
+# first part alone - which is where "Abad" came from, the tail of Hyderabad
+# arriving by itself. Costs nothing in practice: the key almost always
+# arrives first.
+HOTKEY_SILENCE_SECONDS = float(os.getenv("REO_HOTKEY_SILENCE_SECONDS", "3.0"))
 WAIT_FOR_SPEECH_SECONDS = 6  # give up if you say nothing
 MAX_RECORD_SECONDS = 20
 

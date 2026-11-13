@@ -240,11 +240,14 @@ setInterval(poll, 120);
 
 
 // ---- the globe ------------------------------------------------------------
-// Not a wireframe. The reference is a ball of thousands of light streaks, and
-// no arrangement of tidy rings gets near it. So: filaments generated once as
-// points on a sphere, turned about the vertical axis each frame, drawn as
-// short additive strokes. Where they overlap they add up and burn to white,
-// which is what lights the core without computing a single blur.
+// The reference is not a scatter of sparks. Its light runs in long curved
+// strands that wrap the sphere and bunch into bright knots. So every filament
+// here is an arc of a great circle - pick an axis, walk round it - and the
+// axes are clustered, which is what makes the strands run in bands instead of
+// pointing everywhere at once.
+//
+// Cost is kept down by shape, not by cutting detail: an arc of twelve points
+// is one stroke call, where twelve separate dashes would be twelve.
 (() => {
   const canvas = document.getElementById("globe");
   if (!canvas) return;
@@ -252,46 +255,70 @@ setInterval(poll, 120);
 
   // Same arrangement every run, so reo does not look different each launch.
   let seed = 20261109;
-  const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const span = (a, b) => a + rnd() * (b - a);
 
-  const COUNT = 3400;
-  const filaments = [];
-  for (let i = 0; i < COUNT; i++) {
-    // Fibonacci placement: evenly spread, without the clumping at the poles
-    // that picking two random angles gives you.
-    const y = 1 - (i / (COUNT - 1)) * 2;
-    const r = Math.sqrt(Math.max(0, 1 - y * y));
-    const phi = i * 2.399963229728653;
-    const u = [Math.cos(phi) * r, y, Math.sin(phi) * r];
+  function unit() {                       // an even direction on the sphere
+    const z = rnd() * 2 - 1, a = rnd() * Math.PI * 2;
+    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    return [Math.cos(a) * r, Math.sin(a) * r, z];
+  }
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1],
+                           a[2] * b[0] - a[0] * b[2],
+                           a[0] * b[1] - a[1] * b[0]];
+  function norm(v) {
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / l, v[1] / l, v[2] / l];
+  }
+  function nudge(v, amount) {             // a direction near another one
+    return norm([v[0] + (rnd() - 0.5) * amount,
+                 v[1] + (rnd() - 0.5) * amount,
+                 v[2] + (rnd() - 0.5) * amount]);
+  }
 
-    // A tangent to run along, then spun round the normal by a random amount
-    // so the streaks are not all combed the same way.
-    const helper = Math.abs(u[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
-    let tx = helper[1] * u[2] - helper[2] * u[1];
-    let ty = helper[2] * u[0] - helper[0] * u[2];
-    let tz = helper[0] * u[1] - helper[1] * u[0];
-    const tl = Math.hypot(tx, ty, tz) || 1;
-    tx /= tl; ty /= tl; tz /= tl;
-    const a = random() * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
-    const kx = u[1] * tz - u[2] * ty, ky = u[2] * tx - u[0] * tz, kz = u[0] * ty - u[1] * tx;
-    const dir = [tx * ca + kx * sa, ty * ca + ky * sa, tz * ca + kz * sa];
+  // A handful of axes the strands prefer to run around, so the sphere has
+  // grain. Everything sharing one axis sweeps the same way.
+  const AXES = Array.from({ length: 9 }, unit);
+  // And a few places the detail crowds into, the way city light clumps.
+  const KNOTS = Array.from({ length: 7 }, unit);
 
-    const spike = random() < 0.22;            // a few stand off the surface
-    filaments.push({
-      u, dir, spike,
-      shell: 0.9 + random() * 0.16,
-      // Short and fine. Long dashes read as a sparse cage; the reference is
-      // closer to city lights seen from orbit.
-      len: spike ? 0.04 + random() * 0.10 : 0.012 + random() * 0.075,
-      bright: 0.3 + random() * 0.7,
-      wide: random() < 0.10,
+  const strands = [];
+  for (let i = 0; i < 2700; i++) {
+    const axis = nudge(AXES[i % AXES.length], 0.5);
+    let u = norm(cross(axis, Math.abs(axis[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1]));
+    const v = norm(cross(axis, u));
+
+    // Where on that circle it starts: usually near a knot, sometimes anywhere.
+    let from = rnd() * Math.PI * 2;
+    if (rnd() < 0.62) {
+      const k = KNOTS[(i * 7) % KNOTS.length];
+      from = Math.atan2(k[0] * v[0] + k[1] * v[1] + k[2] * v[2],
+                        k[0] * u[0] + k[1] * u[1] + k[2] * u[2])
+             + (rnd() - 0.5) * 1.1;
+    }
+    // Short fragments, overwhelmingly. Long loops read as wound string;
+    // the reference is fine detail packed into bands, with only the odd
+    // sweep running right across it.
+    const long = rnd() < 0.022;
+    const arc = long ? span(1.1, 2.1) : span(0.035, 0.26);
+    strands.push({
+      u, v, from, arc, long,
+      steps: Math.max(2, Math.round(arc * 14)),
+      shell: span(0.88, 1.07),
+      bright: long ? span(0.7, 1) : span(0.25, 1),
+      width: long ? span(0.9, 1.5) : span(0.35, 0.9),
     });
   }
+
+  // Pinpricks between the strands: the fine grain the reference is full of.
+  const motes = Array.from({ length: 2600 }, () => ({
+    p: unit(), shell: span(0.9, 1.06), bright: span(0.2, 1),
+  }));
 
   let width = 0, height = 0;
   function fit() {
     const box = canvas.getBoundingClientRect();
-    // Capping the pixel ratio matters: at 2x this is four times the fill.
+    // Capping the ratio matters: at 2x this is four times the fill.
     const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
     width = Math.max(1, Math.round(box.width));
     height = Math.max(1, Math.round(box.height));
@@ -303,13 +330,13 @@ setInterval(poll, 120);
   addEventListener("resize", fit);
 
   let turn = 0, last = performance.now(), running = true, due = 0;
-  const FRAME = 1000 / 30;           // 30fps is plenty here and halves the work
+  const FRAME = 1000 / 30;            // 30fps is plenty and halves the work
 
   function frame(now) {
     if (!running) return;
     const dt = Math.min(now - last, 100);
     last = now;
-    turn += (dt / 1000) * 0.22 * spin;
+    turn += (dt / 1000) * 0.17 * spin;
     due -= dt;
     if (due <= 0) { due = FRAME; paint(); }
     requestAnimationFrame(frame);
@@ -317,64 +344,66 @@ setInterval(poll, 120);
 
   function paint() {
     const cx = width / 2, cy = height / 2;
-    const R = Math.min(width, height) * 0.40;
-    const focal = 3.2;
+    const R = Math.min(width, height) * 0.42;
+    const focal = 3.4;
     const cos = Math.cos(turn), sin = Math.sin(turn);
 
     ctx.clearRect(0, 0, width, height);
     ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
 
-    for (const f of filaments) {
-      const ux = f.u[0], uy = f.u[1], uz = f.u[2];
-      const reach = f.spike ? 1.4 : 1;
-      const ex = ux + f.dir[0] * f.len * reach;
-      const ey = uy + f.dir[1] * f.len * reach;
-      const ez = uz + f.dir[2] * f.len * reach;
+    for (const s of strands) {
+      // Depth at the middle of the arc decides the whole strand's brightness.
+      // Per-point alpha would mean one stroke per segment, which is the cost
+      // this shape exists to avoid.
+      const mid = s.from + s.arc / 2;
+      const mz = (s.u[2] * Math.cos(mid) + s.v[2] * Math.sin(mid));
+      const zz = mz * cos - (s.u[0] * Math.cos(mid) + s.v[0] * Math.sin(mid)) * sin;
+      const depth = (zz + 1) / 2;
+      const alpha = s.bright * (0.05 + depth * depth * 0.95) * heat * 0.9;
+      if (alpha < 0.01) continue;
 
-      const x1 = ux * cos + uz * sin, z1 = uz * cos - ux * sin;
-      const x2 = ex * cos + ez * sin, z2 = ez * cos - ex * sin;
-
-      const s1 = focal / (focal - z1 * f.shell);
-      const s2 = focal / (focal - z2 * f.shell);
-      const px1 = cx + x1 * f.shell * R * s1, py1 = cy - uy * f.shell * R * s1;
-      const px2 = cx + x2 * f.shell * R * s2, py2 = cy - ey * f.shell * R * s2;
-
-      // Depth sets brightness and warmth. The far side stays, dim, so the
-      // thing reads as a volume instead of a disc.
-      const depth = (z1 + 1) / 2;
-      const alpha = f.bright * (0.13 + depth * depth * 1.05) * heat;
-      if (alpha < 0.012) continue;
-      const light = 46 + depth * 36 + (f.spike ? 12 : 0);
-      // The reference rims cool where the sphere turns away; warm in front,
-      // bluer at the edge, which is what gives it roundness.
-      const edge = 1 - Math.abs(z1);
-      const tone = hue + depth * 14 - edge * 26;
-      ctx.strokeStyle = "hsla(" + tone + ", 95%, " + light + "%, " + alpha.toFixed(3) + ")";
-      ctx.lineWidth = f.wide ? 1.5 : 0.65;
       ctx.beginPath();
-      ctx.moveTo(px1, py1);
-      ctx.lineTo(px2, py2);
+      for (let i = 0; i <= s.steps; i++) {
+        const a = s.from + (s.arc * i) / s.steps;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const px = s.u[0] * ca + s.v[0] * sa;
+        const py = s.u[1] * ca + s.v[1] * sa;
+        const pz = s.u[2] * ca + s.v[2] * sa;
+        const rx = px * cos + pz * sin, rz = pz * cos - px * sin;
+        const k = (focal / (focal - rz * s.shell)) * s.shell * R;
+        const X = cx + rx * k, Y = cy - py * k;
+        if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+      }
+      // Warm in front, cooler as the sphere turns away: that is the roundness.
+      const edge = 1 - Math.abs(zz);
+      ctx.strokeStyle = "hsla(" + (hue + depth * 16 - edge * 24) + ", 96%, " +
+                        (44 + depth * 38) + "%, " + alpha.toFixed(3) + ")";
+      ctx.lineWidth = s.width;
       ctx.stroke();
     }
 
-    // The swirl at the heart of it.
-    for (let i = 0; i < 4; i++) {
-      const rr = R * (0.12 + i * 0.07);
-      const from = turn * (1.6 + i * 0.5) + i;
-      ctx.strokeStyle = "hsla(" + (hue + 16) + ", 100%, " + (66 + i * 4) + "%, " + ((0.30 - i * 0.05) * heat).toFixed(3) + ")";
-      ctx.lineWidth = 2.1 - i * 0.35;
-      ctx.beginPath();
-      ctx.arc(cx, cy, rr, from, from + 2.1 + i * 0.3);
-      ctx.stroke();
+    // The grain. fillRect beats arc() by a mile for a single pixel.
+    for (const m of motes) {
+      const [px, py, pz] = m.p;
+      const rx = px * cos + pz * sin, rz = pz * cos - px * sin;
+      const depth = (rz + 1) / 2;
+      const alpha = m.bright * (0.04 + depth * depth * 0.8) * heat;
+      if (alpha < 0.02) continue;
+      const k = (focal / (focal - rz * m.shell)) * m.shell * R;
+      ctx.fillStyle = "hsla(" + (hue + 10) + ", 100%, " + (58 + depth * 30) +
+                      "%, " + alpha.toFixed(3) + ")";
+      ctx.fillRect(cx + rx * k, cy - py * k, 1.3, 1.3);
     }
 
-    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.34);
-    core.addColorStop(0, "hsla(" + (hue + 20) + ", 100%, 88%, " + (0.55 * heat).toFixed(3) + ")");
-    core.addColorStop(0.45, "hsla(" + (hue + 8) + ", 100%, 60%, " + (0.20 * heat).toFixed(3) + ")");
+    // The heart, burning out to white where everything overlaps.
+    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.42);
+    core.addColorStop(0, "hsla(" + (hue + 22) + ", 100%, 92%, " + (0.5 * heat).toFixed(3) + ")");
+    core.addColorStop(0.35, "hsla(" + (hue + 10) + ", 100%, 62%, " + (0.22 * heat).toFixed(3) + ")");
     core.addColorStop(1, "transparent");
     ctx.fillStyle = core;
     ctx.beginPath();
-    ctx.arc(cx, cy, R * 0.34, 0, Math.PI * 2);
+    ctx.arc(cx, cy, R * 0.42, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.globalCompositeOperation = "source-over";

@@ -60,7 +60,11 @@ class Listener:
         block = int(config.SAMPLE_RATE * BLOCK_SECONDS)
         max_blocks = int(config.MAX_RECORD_SECONDS / BLOCK_SECONDS)
         wait_blocks = int(config.WAIT_FOR_SPEECH_SECONDS / BLOCK_SECONDS)
-        silence_blocks = int(config.SILENCE_SECONDS / BLOCK_SECONDS)
+        # A key press will end this, so silence need only catch the case
+        # where nobody comes back to it.
+        quiet_for = (config.HOTKEY_SILENCE_SECONDS if stop_now is not None
+                     else config.SILENCE_SECONDS)
+        silence_blocks = int(quiet_for / BLOCK_SECONDS)
 
         frames, heard, silent, asked_to_stop, nothing_said = [], False, 0, False, False
         try:

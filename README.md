@@ -193,6 +193,16 @@ plausible click, and the corners of a screen hold Close and Start.
 
 That limit is why `play_youtube` exists rather than an attempt at clicking.
 
+## The laptop itself
+
+`control_system` covers the things that are not characters you can type, so
+SendKeys cannot reach them: `volume_up`, `volume_down`, `mute`, `play_pause`,
+`next_track`, `previous_track`, `minimise`, `maximise`, `restore`,
+`close_window`, `show_desktop`, `lock`. Volume repeats five times per request,
+because Windows moves it two notches a press and one press is inaudible.
+Closing asks the program with WM_CLOSE rather than killing it, so it still
+gets to prompt about unsaved work.
+
 ## Running things on the machine
 
 Set `REO_ALLOW_SHELL=1` in `.env` and reo can run PowerShell: files, folders,

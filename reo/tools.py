@@ -8,7 +8,7 @@ import webbrowser
 
 import psutil
 
-from . import pointer
+from . import pointer, system
 
 # Spoken name -> Windows command. Only these can be launched.
 APPS = {
@@ -263,6 +263,7 @@ FUNCTIONS = {
         x, y, button, double),
     "scroll_mouse": lambda amount=-3: pointer.scroll(amount),
     "cursor_position": lambda: pointer.where(),
+    "control_system": lambda action, amount=0: system.control(action, amount),
     "remember": remember,
     "forget": forget,
     "recall": recall,
@@ -385,6 +386,20 @@ TOOLS = [
         },
     },
     {
+        "name": "control_system",
+        "description": ("The laptop itself: volume_up, volume_down, mute, play_pause, "
+                        "next_track, previous_track, minimise, maximise, restore, "
+                        "close_window, show_desktop, lock."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "amount": {"type": "integer", "description": "repeats, for volume"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
         "name": "cursor_position",
         "description": "Pointer position and screen size.",
         "input_schema": {"type": "object", "properties": {}},
@@ -474,6 +489,15 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
 ]
+
+
+# Tools that only look things up. Several of these in one reply can run at
+# the same time; anything that presses a key or moves a window cannot, because
+# the order it happens in is the whole point.
+READ_ONLY = frozenset({
+    "search_web", "look_up", "read_page", "get_datetime", "get_battery",
+    "recall", "list_apps", "list_windows", "cursor_position",
+})
 
 
 def run_tool(name: str, args: dict) -> str:
