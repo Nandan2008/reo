@@ -199,10 +199,17 @@ def main():
                 "wake": f'say "{woken_by()}"',
                 "push": "press Enter in the console"}.get(config.MODE, "")
         ui = Display(subtitle=hint)
-        ui.run(lambda: _loop(listener, brain, waker, toggle, combination, ui))
+        try:
+            ui.run(lambda: _loop(listener, brain, waker, toggle, combination, ui))
+        finally:
+            listener.mic.close()
         return
 
-    _loop(listener, brain, waker, toggle, combination, None)
+    try:
+        _loop(listener, brain, waker, toggle, combination, None)
+    finally:
+        # The stream is held open between commands, so hand the device back.
+        listener.mic.close()
 
 
 def _loop(listener, brain, waker, toggle, combination, ui):
@@ -251,9 +258,14 @@ def _loop(listener, brain, waker, toggle, combination, ui):
             text = ""
 
         if not is_speech(text):
-            print("(didn't catch that)")
+            # A muted microphone and a mumbled sentence look identical from
+            # here, and they need completely different things done about them.
+            note = ("the microphone is giving back silence - check it is not muted"
+                    if getattr(listener, "heard_nothing", False)
+                    else "(didn't catch that)")
+            print(note)
             if ui:
-                ui.line("note", "(didn't catch that)")
+                ui.line("note", note)
             continue
 
         if not handle(brain, text, ui, heard_in, listener):

@@ -59,13 +59,32 @@ NO_SPEECH_PROB = float(os.getenv("REO_NO_SPEECH_PROB", "0.6"))
 # which reo had already stopped listening and transcribed the first half alone.
 # That is where "Abad" came from - the tail of Hyderabad, arriving by itself.
 SILENCE_SECONDS = float(os.getenv("REO_SILENCE_SECONDS", "0.9"))
-# When a key ends the recording, silence is only a safety net, so it can be
-# generous. His own six second sample has a 2.6s gap in the middle of it, and
-# anything shorter than that chops a sentence in half and transcribes the
-# first part alone - which is where "Abad" came from, the tail of Hyderabad
-# arriving by itself. Costs nothing in practice: the key almost always
-# arrives first.
-HOTKEY_SILENCE_SECONDS = float(os.getenv("REO_HOTKEY_SILENCE_SECONDS", "3.0"))
+# When a key ends the recording, silence is only a safety net. Three seconds
+# was over-cautious: it was set from one recording where he paused for two
+# seconds in the middle of a sentence, and it meant three seconds of nothing
+# at the end of every command that did not end with a second key press.
+# A second and a half covers an ordinary thinking pause, and the transcription
+# now happens *inside* the wait rather than after it, so the whole of what is
+# left here is the wait itself.
+HOTKEY_SILENCE_SECONDS = float(os.getenv("REO_HOTKEY_SILENCE_SECONDS", "1.5"))
+# How long a pause before reo quietly starts transcribing what it has so far.
+# If he carries on talking the attempt is binned and nothing is lost; if he
+# has finished, the words are ready by the time the silence is up.
+EARLY_GUESS_SECONDS = float(os.getenv("REO_EARLY_GUESS_SECONDS", "0.45"))
+# How much of what came *before* the key press to keep. Opening the microphone
+# takes half a second on this laptop, and that half second used to be cut off
+# the front of the first word.
+PRE_ROLL_SECONDS = float(os.getenv("REO_PRE_ROLL_SECONDS", "0.8"))
+# Hold the microphone open between commands so that half second is paid once,
+# at startup, instead of every time the key is pressed. Nothing is kept: the
+# audio goes into a ring of PRE_ROLL_SECONDS that overwrites itself. Set
+# REO_KEEP_MIC_OPEN=0 to open the device per recording instead.
+KEEP_MIC_OPEN = os.getenv("REO_KEEP_MIC_OPEN", "1") not in ("0", "false", "no")
+# How long to wait for the speech model before giving up on it. Recognising
+# six seconds of speech measures 0.66s warm and 2.4s after the laptop has been
+# idle, and one clip once took 853 seconds and never did it again. Whatever
+# that was, reo should say it did not catch you rather than wait all day.
+TRANSCRIBE_TIMEOUT = float(os.getenv("REO_TRANSCRIBE_TIMEOUT", "20"))
 WAIT_FOR_SPEECH_SECONDS = 6  # give up if you say nothing
 MAX_RECORD_SECONDS = 20
 

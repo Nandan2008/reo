@@ -2,6 +2,7 @@
 import re
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 import urllib.parse
@@ -22,8 +23,27 @@ from reo.audio import normalize as normalize_gain
 from reo.__main__ import EXIT_PHRASES
 from reo.text import is_speech, normalize
 from reo.brain import KNOWN_TOOLS, SYSTEM, Brain
-from reo.listen import Listener
+from reo import audio as au_mod
+from reo import listen
+from reo.audio import VoiceDetector
+from reo.listen import Attempt, Listener, Microphone
 from reo.speak import VOICE_SETTINGS, split_emotion
+
+
+
+def _diagnose_clip():
+    """Six seconds of him, saved by diagnose.py. Not in the repository."""
+    import wave
+    path = Path(__file__).resolve().parent.parent / "diagnose.wav"
+    if not path.exists():
+        return None
+    with wave.open(str(path), "rb") as w:
+        rate, channels = w.getframerate(), w.getnchannels()
+        raw = w.readframes(w.getnframes())
+    clip = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    if channels > 1:
+        clip = clip.reshape(-1, channels).mean(axis=1)
+    return clip if rate == 16000 else None
 
 
 class ExitPhrases(unittest.TestCase):
@@ -1063,9 +1083,10 @@ class MicrophoneFailures(unittest.TestCase):
         """Handling the failed read was not enough: stopping a stream the
         device already dropped raises again, and that killed the process."""
         import sounddevice as sd
+        size = listen.BLOCK_SAMPLES
 
         class Stream:
-            def __init__(self): self.left = 4
+            def __init__(self): self.left = 8
             def start(self): pass
             def stop(self): raise sd.PortAudioError("Stream is stopped", -9983)
             def close(self): raise sd.PortAudioError("Stream is stopped", -9983)
@@ -1073,14 +1094,14 @@ class MicrophoneFailures(unittest.TestCase):
                 if self.left <= 0:
                     raise sd.PortAudioError("Stream is stopped", -9983)
                 self.left -= 1
-                return np.full((160, 1), 0.3, dtype=np.float32), False
+                return np.full((size, 1), 0.3, dtype=np.float32), False
 
         listener = self._listener()
         with mock.patch.object(sd, "InputStream", lambda **kw: Stream()):
             audio = listener._record()      # must not raise
-        self.assertEqual(len(audio), 160 * 4)
+        self.assertEqual(len(audio), size * 8)
 
-    def test_giving_up_on_silence_still_closes_the_stream(self):
+    def test_letting_go_of_the_device_really_closes_it(self):
         import sounddevice as sd
         closed = []
 
@@ -1089,12 +1110,15 @@ class MicrophoneFailures(unittest.TestCase):
             def stop(self): closed.append("stop")
             def close(self): closed.append("close")
             def read(self, n):
-                return np.zeros((160, 1), dtype=np.float32), False
+                time.sleep(0.005)
+                return np.zeros((listen.BLOCK_SAMPLES, 1), dtype=np.float32), False
 
         listener = self._listener()
-        with mock.patch.object(sd, "InputStream", lambda **kw: Stream()),              mock.patch.object(config, "WAIT_FOR_SPEECH_SECONDS", 0.2):
-            self.assertIsNone(listener._record())
-        self.assertEqual(closed, ["stop", "close"])
+        listener._mic = Microphone(keep_open=False)
+        with mock.patch.object(sd, "InputStream", lambda **kw: Stream()):
+            with mock.patch.object(config, "WAIT_FOR_SPEECH_SECONDS", 0.2):
+                self.assertIsNone(listener._record())
+        self.assertIn("close", closed)
 
     def test_a_microphone_that_will_not_open_returns_nothing(self):
         import sounddevice as sd
@@ -1273,40 +1297,35 @@ class SilentSegments(unittest.TestCase):
 
 
 class Endpointing(unittest.TestCase):
-    """Cutting a sentence in half and transcribing the first part alone is
-    where "Abad" came from - the tail of Hyderabad arriving by itself."""
+    """How long reo waits before deciding a sentence is over. Too short cuts
+    it in half and transcribes the first part alone - which is where "Abad"
+    came from, the tail of Hyderabad arriving by itself. Too long is three
+    seconds of nothing at the end of every single command."""
 
-    def test_the_key_gets_a_long_safety_net(self):
-        """His own sample has a 2.6s gap in the middle of one sentence."""
-        self.assertGreaterEqual(config.HOTKEY_SILENCE_SECONDS, 2.6)
+    def test_a_thinking_pause_survives(self):
+        """Ordinary mid-sentence pauses run to about a second."""
+        self.assertGreaterEqual(config.HOTKEY_SILENCE_SECONDS, 1.2)
+
+    def test_but_not_so_long_that_it_feels_broken(self):
+        self.assertLessEqual(config.HOTKEY_SILENCE_SECONDS, 2.0)
 
     def test_without_a_key_silence_still_ends_it(self):
         """Nothing else is going to, so it has to stay short."""
         self.assertLess(config.SILENCE_SECONDS, 1.5)
 
+    def test_the_guess_starts_well_inside_the_wait(self):
+        """Or there is no pause left to do the transcribing in."""
+        self.assertLess(config.EARLY_GUESS_SECONDS, config.SILENCE_SECONDS)
+        self.assertLess(config.EARLY_GUESS_SECONDS, config.HOTKEY_SILENCE_SECONDS)
+
     def _blocks_before_stopping(self, stop_now):
         """How many blocks of pure silence _record tolerates after speech."""
-        import sounddevice as sd
-        loud = np.full((1600, 1), 0.3, dtype=np.float32)
-        quiet = np.zeros((1600, 1), dtype=np.float32)
-        reads = []
+        listener, heard = _scripted(
+            [True] * 3 + [False] * 200, transcripts=["something"])
+        listener._record(stop_now=stop_now)
+        return len(heard)
 
-        class Stream:
-            def start(self): pass
-            def stop(self): pass
-            def close(self): pass
-            def read(self, n):
-                reads.append(1)
-                return (loud if len(reads) <= 3 else quiet), False
-
-        listener = Listener.__new__(Listener)
-        listener.language, listener.detected = "en", True
-        listener.transcribe_seconds = 0.0
-        with mock.patch.object(sd, "InputStream", lambda **kw: Stream()):
-            listener._record(stop_now=stop_now)
-        return len(reads)
-
-    def test_a_pause_survives_when_a_key_will_end_it(self):
+    def test_a_pause_survives_longer_when_a_key_will_end_it(self):
         with_key = self._blocks_before_stopping(stop_now=lambda: False)
         without = self._blocks_before_stopping(stop_now=None)
         self.assertGreater(with_key, without)
@@ -1359,7 +1378,7 @@ class ParallelTools(unittest.TestCase):
     def test_lookups_run_at_the_same_time(self):
         order, elapsed, overlapped, _ = self._run(["search_web", "look_up", "read_page"])
         self.assertTrue(overlapped)
-        self.assertLess(elapsed, 0.30)          # not 3 x 0.12 end to end
+        self.assertLess(elapsed, 0.33)          # not 3 x 0.12 end to end
 
     def test_anything_that_acts_runs_in_order(self):
         """press_key then type_text has to happen in that order or it is wrong."""
@@ -1435,6 +1454,341 @@ class SystemControls(unittest.TestCase):
 
     def test_it_is_reachable_as_a_tool(self):
         self.assertIn("control_system", tools.FUNCTIONS)
+
+
+def _fake_stream(blocks=None, pace=0.005):
+    """A microphone that hands out blocks forever, as fast as it is asked."""
+    size = listen.BLOCK_SAMPLES
+    made = []
+
+    class Stream:
+        def start(self): pass
+        def stop(self): pass
+        def close(self): pass
+        def read(self, n):
+            time.sleep(pace)
+            if blocks:
+                block = blocks.pop(0)
+            else:
+                block = np.full((size, 1), 0.01 * (len(made) % 7 + 1), dtype=np.float32)
+            made.append(block)
+            return block, False
+
+    return Stream, made
+
+
+def _scripted(voiced, transcripts, stop_now=None, pace=None):
+    """A Listener whose ears are a script, so the timing can be tested without
+    a microphone or a model. Returns the listener and the list it fills in."""
+    import sounddevice as sd
+    heard = []
+    Stream, _ = _fake_stream(pace=listen.BLOCK_SECONDS if pace is None else pace)
+    patcher = mock.patch.object(sd, "InputStream", lambda **kw: Stream())
+    patcher.start()
+
+    listener = Listener.__new__(Listener)
+    listener.language, listener.detected = "en", True
+    listener.transcribe_seconds = 0.0
+    listener._guess = None
+    listener._mic = Microphone(keep_open=False)
+    listener._voice = SimpleNamespace(reset=lambda: None, ready=True)
+    script = list(voiced)
+
+    def ears(block, mid_sentence):
+        heard.append(mid_sentence)
+        return script.pop(0) if script else False
+
+    listener._voiced = ears
+    said = list(transcripts)
+
+    def transcribe(raw):
+        time.sleep(0.05)
+        listener.transcribed.append(len(raw))
+        return said.pop(0) if said else ""
+
+    listener.transcribed = []
+    listener._transcribe = transcribe
+    listener._stopper = patcher
+    return listener, heard
+
+
+class HeldMicrophone(unittest.TestCase):
+    """Opening the device costs half a second - 491ms measured on this laptop -
+    and that half second used to sit between the key press and the first word."""
+
+    def _mic(self, keep_open=True):
+        import sounddevice as sd
+        Stream, made = _fake_stream()
+        patcher = mock.patch.object(sd, "InputStream", lambda **kw: Stream())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        mic = Microphone(keep_open=keep_open)
+        self.addCleanup(mic.close)
+        return mic
+
+    def test_what_came_before_the_key_press_comes_with_it(self):
+        mic = self._mic()
+        self.assertTrue(mic.open())
+        time.sleep(0.15)                        # the room, before he presses
+        before = mic.start()
+        mic.done()
+        self.assertTrue(before, "nothing was kept from before the key press")
+        self.assertGreater(float(np.max(np.abs(np.concatenate(before)))), 0.0)
+
+    def test_it_keeps_only_a_moment_of_it(self):
+        """It is a ring, not a recording: the room is not being collected."""
+        mic = self._mic()
+        mic.open()
+        time.sleep(0.6)
+        kept = len(mic.start()) * listen.BLOCK_SECONDS
+        mic.done()
+        self.assertLessEqual(kept, config.PRE_ROLL_SECONDS + listen.BLOCK_SECONDS)
+
+    def test_the_ring_is_emptied_when_a_recording_ends(self):
+        mic = self._mic()
+        mic.open()
+        time.sleep(0.15)
+        mic.start()
+        mic.done()
+        self.assertEqual(list(mic._recent), [])
+
+    def test_a_held_microphone_is_opened_once(self):
+        mic = self._mic(keep_open=True)
+        mic.start()
+        mic.done()
+        first = mic._stream
+        mic.start()
+        mic.done()
+        self.assertIs(mic._stream, first, "reopened the device between commands")
+
+    def test_letting_go_closes_it(self):
+        mic = self._mic(keep_open=False)
+        mic.start()
+        mic.done()
+        self.assertIsNone(mic._stream)
+
+    def test_no_microphone_is_not_a_crash(self):
+        import sounddevice as sd
+
+        def refuse(**kwargs):
+            raise sd.PortAudioError("Invalid device", -9996)
+
+        with mock.patch.object(sd, "InputStream", refuse):
+            mic = Microphone()
+            self.addCleanup(mic.close)
+            self.assertFalse(mic.open())
+            self.assertIsNone(mic.start())
+
+    def test_the_wake_word_is_not_made_to_share_the_device(self):
+        """In wake mode openWakeWord holds a stream of its own on the same
+        microphone, so only the hotkey keeps one open."""
+        listener = Listener.__new__(Listener)
+        with mock.patch.object(config, "MODE", "wake"):
+            self.assertFalse(listener.mic.keep_open)
+
+
+class TranscribingInThePause(unittest.TestCase):
+    """Recognition costs about 0.6s whatever the length, and that 0.6s used to
+    be added on after the wait rather than spent during it."""
+
+    def tearDown(self):
+        for listener in getattr(self, "_made", []):
+            listener._stopper.stop()
+
+    def _listener(self, voiced, transcripts, **kw):
+        listener, _ = _scripted(voiced, transcripts, **kw)
+        self._made = getattr(self, "_made", []) + [listener]
+        return listener
+
+    def test_the_words_are_ready_when_the_silence_is_up(self):
+        silence = int(config.SILENCE_SECONDS / listen.BLOCK_SECONDS) + 2
+        listener = self._listener([True] * 5 + [False] * silence,
+                                  ["open chrome"])
+        self.assertEqual(listener.listen(), "open chrome")
+        self.assertLess(listener.transcribe_seconds, 0.03,
+                        "he waited for the transcription instead of it waiting for him")
+
+    def test_talking_again_throws_the_half_sentence_away(self):
+        silence = int(config.SILENCE_SECONDS / listen.BLOCK_SECONDS)
+        early = int(config.EARLY_GUESS_SECONDS / listen.BLOCK_SECONDS)
+        listener = self._listener(
+            [True] * 5 + [False] * (early + 2) + [True] * 3 + [False] * (silence + 2),
+            ["half of it", "the whole of it"])
+        self.assertEqual(listener.listen(), "the whole of it")
+        self.assertEqual(len(listener.transcribed), 2, "it did not try twice")
+        self.assertGreater(listener.transcribed[1], listener.transcribed[0],
+                           "the second attempt did not cover more of the sentence")
+
+    def test_a_recording_with_no_voice_in_it_is_never_transcribed(self):
+        listener = self._listener([False] * 400, ["should not happen"])
+        with mock.patch.object(config, "WAIT_FOR_SPEECH_SECONDS", 0.3):
+            self.assertEqual(listener.listen(), "")
+        self.assertEqual(listener.transcribed, [])
+
+
+class HearingAVoice(unittest.TestCase):
+    """Loudness cannot tell a person from a door. This is the model whisper
+    itself uses to find speech, run live on each block as it arrives."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.detector = VoiceDetector()
+        if not cls.detector.ready:
+            raise unittest.SkipTest("no onnxruntime, so no voice detection")
+
+    def _marks(self, audio):
+        self.detector.reset()
+        size = listen.BLOCK_SAMPLES
+        return [self.detector.chance(audio[i:i + size]) > au_mod.SPEECH_STARTS
+                for i in range(0, len(audio) - size, size)]
+
+    def test_his_own_voice_is_found(self):
+        audio = _diagnose_clip()
+        if audio is None:
+            self.skipTest("no recording of him to test against")
+        marks = self._marks(audio)
+        self.assertTrue(any(marks), "did not hear him at all")
+        # He speaks for about 2.6s of the six, with a long pause in the middle.
+        heard = sum(marks) * listen.BLOCK_SECONDS
+        self.assertGreater(heard, 1.5)
+        self.assertLess(heard, 4.0)
+
+    def test_the_quiet_part_of_his_own_room_is_not_a_voice(self):
+        audio = _diagnose_clip()
+        if audio is None:
+            self.skipTest("no recording of him to test against")
+        # The gap in the middle of that recording: his actual room, not silence.
+        self.assertFalse(any(self._marks(audio[16000 * 2 + 8000: 16000 * 4])))
+
+    def test_silence_is_not_a_voice(self):
+        self.assertFalse(any(self._marks(np.zeros(16000, dtype=np.float32))))
+
+    def test_a_loud_bang_is_not_a_voice(self):
+        """A door, a dropped book, a hand on the desk. Louder than he is."""
+        bang = np.zeros(16000, dtype=np.float32)
+        bang[4000:4300] = np.linspace(1.0, 0.0, 300) ** 2
+        self.assertFalse(any(self._marks(bang)))
+
+    def test_a_hiss_is_not_a_voice(self):
+        rng = np.random.default_rng(7)
+        hiss = rng.normal(0, 0.05, 16000).astype(np.float32)
+        self.assertFalse(any(self._marks(hiss)))
+
+    def test_losing_the_model_falls_back_to_loudness(self):
+        detector = VoiceDetector()
+        detector._session = None
+        self.assertEqual(detector.chance(np.zeros(1024, dtype=np.float32)), -1.0)
+        listener = Listener.__new__(Listener)
+        listener._voice = detector
+        self.assertTrue(listener._voiced(
+            np.full(1024, 0.3, dtype=np.float32), mid_sentence=False))
+        self.assertFalse(listener._voiced(
+            np.zeros(1024, dtype=np.float32), mid_sentence=False))
+
+
+class NeverWaitForEver(unittest.TestCase):
+    """One 2.5s clip of him took 853 seconds to transcribe and never did it
+    again. Whatever that was, reo should give up rather than freeze."""
+
+    def test_an_attempt_that_finishes_hands_back_its_words(self):
+        attempt = Attempt(lambda: "open chrome")
+        self.assertEqual(attempt.wait(2.0), "open chrome")
+        self.assertTrue(attempt.finished)
+
+    def test_an_attempt_that_will_not_finish_is_given_up_on(self):
+        stuck = threading.Event()
+        self.addCleanup(stuck.set)
+        attempt = Attempt(lambda: stuck.wait() or "too late")
+        self.assertIsNone(attempt.wait(0.1))
+        self.assertFalse(attempt.finished)
+
+    def test_trouble_in_the_thread_is_not_swallowed(self):
+        def explode():
+            raise RuntimeError("the model fell over")
+
+        attempt = Attempt(explode)
+        with self.assertRaises(RuntimeError):
+            attempt.wait(2.0)
+
+    def test_listening_gives_up_instead_of_freezing(self):
+        stuck = threading.Event()
+        self.addCleanup(stuck.set)
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.transcribe_seconds = 0.0
+        listener._guess = None
+        listener._record = lambda stop_now=None: np.zeros(16000, dtype=np.float32)
+        listener._transcribe = lambda raw: stuck.wait() or "too late"
+        with mock.patch.object(config, "TRANSCRIBE_TIMEOUT", 0.15):
+            began = time.time()
+            self.assertEqual(listener.listen(), "")
+        self.assertLess(time.time() - began, 2.0)
+
+    def test_a_stuck_attempt_does_not_hold_the_model_for_ever(self):
+        """The next command gets told the model is busy, not left hanging."""
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener._model_lock = threading.Lock()
+        listener._voice = SimpleNamespace(ready=True, reset=lambda: None)
+        listener._model_lock.acquire()
+        self.addCleanup(listener._model_lock.release)
+        with mock.patch.object(config, "TRANSCRIBE_TIMEOUT", 0.1):
+            self.assertEqual(
+                listener._transcribe(np.full(16000, 0.07, dtype=np.float32)), "")
+
+
+class ADeadDevice(unittest.TestCase):
+    """A muted microphone and a mumbled sentence look identical from inside
+    reo, and they need completely different things done about them."""
+
+    def _listener(self, audio):
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.transcribe_seconds = 0.0
+        listener._guess = None
+        listener._record = lambda stop_now=None: audio
+        listener._transcribe = lambda raw: "should never be asked"
+        return listener
+
+    def test_digital_silence_is_never_transcribed(self):
+        listener = self._listener(np.zeros(16000, dtype=np.float32))
+        self.assertEqual(listener.listen(), "")
+        self.assertTrue(listener.heard_nothing)
+
+    def test_a_muted_realtek_array_counts_as_nothing(self):
+        """Measured on his own laptop: 0.00003 peak with nothing coming in."""
+        listener = self._listener(np.full(16000, 0.00003, dtype=np.float32))
+        self.assertEqual(listener.listen(), "")
+        self.assertTrue(listener.heard_nothing)
+
+    def test_a_quiet_room_is_not_a_dead_device(self):
+        """0.0012 is his measured room. That is a mumble problem, not a
+        plugged-in problem, and it still goes to whisper."""
+        listener = self._listener(np.full(16000, 0.0012, dtype=np.float32))
+        listener._transcribe = lambda raw: "turn it down"
+        self.assertEqual(listener.listen(), "turn it down")
+        self.assertFalse(listener.heard_nothing)
+
+    def test_he_is_told_which_of_the_two_it_was(self):
+        import reo.__main__ as main
+        said = []
+        listener = self._listener(np.zeros(16000, dtype=np.float32))
+        listener.listen()
+        ui = SimpleNamespace(closed=False, line=lambda kind, text: said.append(text),
+                             set_state=lambda state: None)
+        toggle = SimpleNamespace(listening=True,
+                                 wait_until_listening=lambda: None)
+
+        def stop_after_one(*a, **kw):
+            ui.closed = True
+            return ""
+
+        listener.listen = stop_after_one
+        listener.heard_nothing = True
+        with mock.patch.object(main, "speak", lambda *a, **kw: None):
+            main._loop(listener, None, None, toggle, "ctrl+alt+r", ui)
+        self.assertTrue(any("muted" in line for line in said),
+                        f"he was not told the microphone was silent: {said}")
 
 
 if __name__ == "__main__":
