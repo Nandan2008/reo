@@ -153,25 +153,60 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-Eighty-six tests, no microphone or API key needed. They cover the things that
-actually broke: exit phrases with punctuation inside them, noise transcriptions,
-emotion tags and repeated answers, tool failures, history trimming keeping tool
-calls paired, contractions reaching the fast path, sticky language detection,
-and falling over to a second API key.
+That runs both suites: 264 tests, no API key needed.
+
+`tests/test_reo.py` is the fast one - 253 tests, no microphone, no model. It
+covers the things that actually broke: exit phrases with punctuation inside
+them, noise transcriptions, emotion tags and repeated answers, tool failures,
+history trimming keeping tool calls paired, contractions reaching the fast
+path, sticky language detection, names that would write a file outside reo's
+folder, and falling over to a second key.
+
+`tests/test_voice.py` is the slow one, and the one that matters most. Eleven
+tests that put six seconds of real recorded speech in through a stand-in sound
+card, through the real voice detector and the real speech model, and check what
+comes out: he speaks straight away, he takes three seconds to begin, something
+was said before he pressed the key, he presses again to stop, his empty room is
+not turned into words.
+
+That file exists because the same bug got in twice. Everything in the fast
+suite that touches listening fakes the hard part - the detector is a script, or
+the transcription is a lambda - so a change that broke listening entirely left
+all of them green. The rule it enforces: a test of the pre-roll whose pre-roll
+contains the words it then asserts on is not a test. It passes whatever the
+code does. The two have to hold different words, or the test cannot tell the
+outcomes apart.
+
+It needs `diagnose.wav`, which is a recording of the owner's voice and is not
+in the repository. Without it these skip. Make your own with `python
+diagnose.py`.
 
 ## The window
 
-reo opens a JARVIS-style dial: graduated rings, bearing brackets and calipers
-that turn faster and change colour as it listens, thinks and speaks, with the
-conversation and a panel of counters beside it. `REO_UI=0` in `.env` runs it in
-the console alone.
+reo opens a reactor, dead centre of the screen, with the conversation down one
+side and a panel of counters down the other. `REO_UI=0` in `.env` runs it in the
+console alone.
 
-It is drawn as one SVG. Every ring carries `pathLength="360"`, which makes
-`stroke-dasharray` read in degrees, so `"0.5 2.5"` is 120 tick marks at any
-radius and any window size. Nothing blurred or shadowed is animated: that was
-the old reactor's real cost, a 34px blur and two large box-shadows being
-re-rasterised every frame because the elements carrying them were scaling.
-Only `transform` moves, which the compositor handles without repainting.
+Six layers on one canvas, and the effect is in them disagreeing. The body does
+not move - eighteen windings round a hub, a containment ring, and the triangle -
+while four rings of instrumentation turn at different rates, two of them
+backwards, and three orbits tilted out of the plane give it a near side. A sweep
+runs round the graduated scale and light falls inwards into the core. The
+stillness of the body is the point: a reactor that spins is a loading spinner,
+and it is the still centre that makes everything round it read as
+instrumentation rather than decoration.
+
+Ice blue at rest, brighter when listening, amber when thinking. The colour snaps
+between states rather than easing, because easing a hue from cyan to amber walks
+it through green and reo spent every transition looking like a different
+machine. Spin and heat still ease, so a state change is a surge.
+
+What keeps it cheap: nothing blurred or shadowed is animated - that was the
+first reactor's real cost, a 34px blur and two large box-shadows re-rasterised
+every frame because the elements carrying them were scaling. There is no
+`shadowBlur` anywhere; the glow is additive compositing instead. The pixel ratio
+is capped at 1.5, the loop is capped at 30fps, the haze behind it is painted
+once in CSS, and the whole thing stops dead when the window is hidden.
 
 ## Playing a video
 
