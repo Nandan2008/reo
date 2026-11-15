@@ -48,13 +48,44 @@ class Memory:
         if not fact:
             return "Nothing to remember."
         with self._lock:
-            match = self._find(fact)
+            # Superseding is checked first. _find treats one fact containing
+            # another as the same fact, so "User's name is Nandan Sai" was
+            # being swallowed by "User's name is Nandan" already being there
+            # and the correction was silently dropped.
+            older = self._supersedes(fact)
+            if older is not None and older["text"].lower() == fact.lower():
+                return f"Already knew that: {older['text']}"
+            match = None if older is not None else self._find(fact)
             if match is not None:
                 return f"Already knew that: {match['text']}"
+            if older is not None:
+                was = older["text"]
+                older["text"] = fact
+                older["since"] = date.today().isoformat()
+                self._save()
+                return f"Changed that: {was} -> {fact}"
             self.facts.append({"text": fact, "since": date.today().isoformat()})
             del self.facts[:-KEEP]
             self._save()
         return f"Remembered: {fact}"
+
+    def _supersedes(self, fact: str):
+        """An existing fact this one replaces: same opening, different end.
+
+        He ended up with "User's name is Nandan", "User's name is Byron" and
+        "User's name is Nanan Sai" all in front of the model at once, because
+        each was a different enough string to count as new. Reo then had
+        three names for him and picked whichever it liked. A fact that opens
+        the same way as one already held is a correction of it, not another
+        one to keep beside it.
+        """
+        opening = " ".join(fact.lower().split()[:3])
+        if len(opening.split()) < 3:
+            return None
+        for existing in self.facts:
+            if " ".join(existing["text"].lower().split()[:3]) == opening:
+                return existing
+        return None
 
     def forget(self, about: str) -> str:
         about = " ".join(str(about).split()).lower()

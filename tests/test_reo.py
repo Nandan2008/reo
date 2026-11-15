@@ -3223,5 +3223,55 @@ class KnowingWhatItIs(unittest.TestCase):
             encoding="utf-8").read().split("COMPILED = ")[1][:80])
 
 
+class OneNameNotThree(unittest.TestCase):
+    """His memory ended up holding "User's name is Nandan", "User's name is
+    Byron" and "User's name is Nanan Sai" at once - two written by test runs
+    of mine, one a mishearing - because each was a different enough string to
+    count as new. Reo had three names for him and picked whichever it liked.
+    """
+
+    def _memory(self):
+        home = Path(tempfile.mkdtemp(prefix="reo-mem-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        return Memory(home / "m.json")
+
+    def test_a_fact_that_opens_the_same_way_replaces_the_old_one(self):
+        m = self._memory()
+        m.remember("User's name is Nandan")
+        said = m.remember("User's name is Byron")
+        self.assertIn("Changed that", said)
+        self.assertEqual(len(m.facts), 1)
+        self.assertIn("Byron", m.recall())
+        self.assertNotIn("Nandan", m.recall())
+
+    def test_a_different_fact_is_kept_beside_it(self):
+        m = self._memory()
+        m.remember("User's name is Nandan")
+        m.remember("He lives in Hyderabad")
+        self.assertEqual(len(m.facts), 2)
+
+    def test_saying_the_same_thing_twice_changes_nothing(self):
+        m = self._memory()
+        m.remember("User's name is Nandan")
+        said = m.remember("User's name is Nandan")
+        self.assertIn("Already knew", said)
+        self.assertEqual(len(m.facts), 1)
+
+    def test_a_two_word_fact_is_not_treated_as_an_update(self):
+        """Too short an opening to mean anything."""
+        m = self._memory()
+        m.remember("likes tea")
+        m.remember("likes coffee")
+        self.assertEqual(len(m.facts), 2)
+
+    def test_the_replacement_is_written_to_disk(self):
+        m = self._memory()
+        m.remember("User's name is Nandan")
+        m.remember("User's name is Nandan Sai")
+        again = Memory(m.path)
+        self.assertEqual(len(again.facts), 1)
+        self.assertIn("Nandan Sai", again.recall())
+
+
 if __name__ == "__main__":
     unittest.main()
