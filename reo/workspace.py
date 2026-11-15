@@ -16,7 +16,7 @@ import os
 import re
 from pathlib import Path
 
-from . import config
+from . import config, undo
 
 # What a file may be called. Letters, digits, dot, dash, underscore, and a
 # forward slash for a subfolder. Not a colon (drive letters), not a backslash,
@@ -79,11 +79,27 @@ def write(name: str, content: str) -> str:
     except OSError as e:
         return f"Could not write it: {e}"
 
+    undo.remember(f"writing {path.name}",
+                  lambda: _put_back(path, replaced))
+
     lines = content.count("\n") + 1 if content else 0
     where = path.relative_to(desk().resolve())
     return (f"{'Replaced' if replaced else 'Wrote'} {where} "
             f"({lines} lines) in {desk()}."
             + (" The previous one is beside it, ending .last." if replaced else ""))
+
+
+def _put_back(path, had_one_before: bool) -> str:
+    """Undo a write: the copy that was kept, or nothing at all."""
+    keep = path.with_suffix(path.suffix + ".last")
+    if not had_one_before:
+        path.unlink(missing_ok=True)
+        return f"Removed {path.name} again."
+    if not keep.exists():
+        return f"There is no earlier copy of {path.name} to go back to."
+    path.write_bytes(keep.read_bytes())
+    keep.unlink(missing_ok=True)
+    return f"Put the earlier {path.name} back."
 
 
 def read(name: str) -> str:

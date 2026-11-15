@@ -271,6 +271,28 @@ because Windows moves it two notches a press and one press is inaudible.
 Closing asks the program with WM_CLOSE rather than killing it, so it still
 gets to prompt about unsaved work.
 
+## Taking it back
+
+Reo is driven by speech, and speech mishears. "Turn it down" comes back as
+"turn it up". Say **"undo that"** and it goes back.
+
+What it will put back: the volume, mute, the media keys, a window it
+minimised or maximised, showing the desktop, and a file it wrote over. The
+window one remembers *which* window - by the time you change your mind
+something else is in front, and restoring "the window in front" would be the
+wrong window.
+
+What it will not: locking the screen, and closing a program. Reo cannot
+unlock anything, and a program that has closed has already decided what to do
+about unsaved work. Doing either of those also clears the record, so "lock
+the screen" then "undo that" does not quietly put the volume back to where it
+was five minutes earlier.
+
+It is one step, not a stack, and undoing is not itself undoable - saying it
+twice tells you there is nothing left rather than turning the volume up
+again. It never reaches the model, so it still works when the allowance is
+spent.
+
 ## Running things on the machine
 
 Set `REO_ALLOW_SHELL=1` in `.env` and reo can run PowerShell: files, folders,

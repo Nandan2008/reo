@@ -18,6 +18,7 @@ from reo import config, fastpath, providers, tools
 from reo import memory as memory_module
 from reo import brain as brain_module
 from reo import pointer
+from reo import undo
 from reo import workspace
 from reo import system as reo_system
 from reo.memory import Memory
@@ -3007,6 +3008,138 @@ class WhichEarHeardIt(unittest.TestCase):
         with mock.patch.object(config, "HEARING", "hosted"):
             listener._transcribe(np.full(16000, 0.07, dtype=np.float32))
         self.assertEqual(listener.heard_by, "groq")
+
+
+class PuttingItBack(unittest.TestCase):
+    """Reo is driven by speech and speech mishears. "Turn it down" comes back
+    as "turn it up" and the fix should be two words, not a trip to the
+    settings."""
+
+    def setUp(self):
+        undo.forget()
+        self.addCleanup(undo.forget)
+
+    def _user32(self, handles=(1111, 2222)):
+        fake = mock.MagicMock()
+        fake.GetForegroundWindow.side_effect = list(handles)
+        fake.GetWindowTextLengthW.return_value = 7
+        fake.GetWindowTextW.side_effect = (
+            lambda h, buf, n: buf.__setitem__(slice(0, 7), "Notepad"))
+        return fake
+
+    def test_nothing_done_means_nothing_to_undo(self):
+        self.assertIn("nothing", undo.undo().lower())
+
+    def test_the_volume_goes_back(self):
+        taps = []
+        with mock.patch.object(reo_system, "_tap",
+                               lambda code, times=1: taps.append((code, times))):
+            reo_system.control("volume_up", 3)
+            self.assertEqual(undo.waiting(), "volume up")
+            undo.undo()
+        self.assertEqual(taps, [(0xAF, 3), (0xAE, 3)],
+                         "it did not put back the same number of notches")
+
+    def test_mute_is_its_own_reverse(self):
+        taps = []
+        with mock.patch.object(reo_system, "_tap",
+                               lambda code, times=1: taps.append(code)):
+            reo_system.control("mute")
+            undo.undo()
+        self.assertEqual(taps, [0xAD, 0xAD])
+
+    def test_undoing_twice_does_not_do_it_again(self):
+        """Putting the volume back calls control() like anything else, so
+        without care it recorded itself and "undo" twice turned it up again."""
+        taps = []
+        with mock.patch.object(reo_system, "_tap",
+                               lambda code, times=1: taps.append(code)):
+            reo_system.control("volume_up", 1)
+            undo.undo()
+            second = undo.undo()
+        self.assertEqual(len(taps), 2, "the undo was itself undone")
+        self.assertIn("nothing", second.lower())
+
+    def test_the_window_it_minimised_is_the_one_it_puts_back(self):
+        """By the time he changes his mind something else is in front, and
+        restoring "the window in front" would be the wrong window."""
+        shown = []
+        fake = self._user32()
+        fake.ShowWindow.side_effect = lambda h, cmd: shown.append((h, cmd))
+        with mock.patch.object(reo_system, "_user32", lambda: fake):
+            reo_system.control("minimise")
+            undo.undo()
+        self.assertEqual([h for h, _ in shown], [1111, 1111])
+        self.assertEqual(shown[-1][1], reo_system.SHOW["restore"])
+
+    def test_locking_cannot_be_undone_and_clears_the_record(self):
+        """Or "lock the screen" then "undo that" would quietly put the volume
+        back to where it was five minutes ago."""
+        fake = self._user32()
+        with mock.patch.object(reo_system, "_tap", lambda code, times=1: None), \
+             mock.patch.object(reo_system, "_user32", lambda: fake):
+            reo_system.control("volume_up", 2)
+            self.assertTrue(undo.waiting())
+            reo_system.control("lock")
+        self.assertEqual(undo.waiting(), "")
+        self.assertIn("nothing", undo.undo().lower())
+
+    def test_closing_a_window_cannot_be_undone_either(self):
+        fake = self._user32()
+        with mock.patch.object(reo_system, "_tap", lambda code, times=1: None), \
+             mock.patch.object(reo_system, "_user32", lambda: fake):
+            reo_system.control("volume_up", 2)
+            reo_system.control("close_window")
+        self.assertEqual(undo.waiting(), "")
+
+    def test_a_file_written_over_comes_back(self):
+        home = Path(tempfile.mkdtemp(prefix="reo-undo-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        with mock.patch.object(config, "WORKSPACE", str(home)):
+            workspace.write("notes.txt", "the first version")
+            workspace.write("notes.txt", "the one he did not want")
+            self.assertEqual((home / "notes.txt").read_text(encoding="utf-8"),
+                             "the one he did not want")
+            undo.undo()
+        self.assertEqual((home / "notes.txt").read_text(encoding="utf-8"),
+                         "the first version")
+
+    def test_a_brand_new_file_is_removed_again(self):
+        home = Path(tempfile.mkdtemp(prefix="reo-undo-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        with mock.patch.object(config, "WORKSPACE", str(home)):
+            workspace.write("fresh.txt", "only version")
+            undo.undo()
+        self.assertFalse((home / "fresh.txt").exists())
+
+    def test_a_write_that_failed_is_not_offered_as_undoable(self):
+        home = Path(tempfile.mkdtemp(prefix="reo-undo-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        with mock.patch.object(config, "WORKSPACE", str(home)):
+            workspace.write("../escaped.txt", "should not be written")
+        self.assertEqual(undo.waiting(), "")
+
+    def test_an_undo_that_throws_says_so_rather_than_crashing(self):
+        def explode():
+            raise RuntimeError("the window is gone")
+
+        undo.remember("minimising something", explode)
+        said = undo.undo()
+        self.assertIn("Could not undo", said)
+        self.assertEqual(undo.waiting(), "", "it stayed on the hook")
+
+    def test_saying_it_never_reaches_the_model(self):
+        for said in ["undo", "undo that", "undo it", "put that back",
+                     "take it back", "can you undo that", "reverse that",
+                     "undo the last thing"]:
+            with self.subTest(said=said):
+                self.assertIsNotNone(fastpath.answer(said))
+
+    def test_talking_about_undo_still_reaches_the_model(self):
+        for said in ["undo my homework", "how do i undo this in word",
+                     "whats the undo shortcut", "undo button"]:
+            with self.subTest(said=said):
+                self.assertIsNone(fastpath.answer(said))
 
 
 if __name__ == "__main__":

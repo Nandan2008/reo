@@ -10,6 +10,17 @@ a document without the program it belongs to getting a say.
 """
 import ctypes
 
+from . import undo
+
+# What reversing each of these means. A toggle is its own reverse; the ones
+# missing from here cannot be reversed at all, and say so by clearing the
+# record rather than leaving the action before them to be undone instead.
+REVERSE = {
+    "volume_up": "volume_down", "volume_down": "volume_up",
+    "mute": "mute", "play_pause": "play_pause",
+    "next_track": "previous_track", "previous_track": "next_track",
+}
+
 # Virtual key codes. Windows moves the volume two notches per press, so a
 # spoken "turn it up" has to repeat before anyone hears a difference.
 VK = {
@@ -45,6 +56,12 @@ def _foreground_title() -> str:
     return buffer.value or "that window"
 
 
+def _restore(handle, title: str) -> str:
+    """Put one particular window back, whatever is in front now."""
+    _user32().ShowWindow(handle, SHOW["restore"])
+    return f"Put {title} back."
+
+
 def control(action: str, amount: int = 0) -> str:
     """One spoken command about the machine itself."""
     action = (action or "").strip().lower().replace(" ", "_").replace("-", "_")
@@ -52,6 +69,12 @@ def control(action: str, amount: int = 0) -> str:
     if action in VK:
         times = amount if amount > 0 else REPEATS.get(action, 1)
         _tap(VK[action], times)
+        if action in REVERSE:
+            back = REVERSE[action]
+            undo.remember(action.replace("_", " "),
+                          lambda: control(back, times))
+        else:
+            undo.forget()
         if action == "mute":
             return "Toggled mute."
         if action.startswith("volume"):
@@ -65,6 +88,13 @@ def control(action: str, amount: int = 0) -> str:
             return "No window is in front."
         title = _foreground_title()
         user32.ShowWindow(handle, SHOW[action])
+        # The handle, not "the window in front": by the time he says undo,
+        # something else is in front and restoring that would be wrong.
+        if SHOW[action] != SHOW["restore"]:
+            undo.remember(f"{action} on {title}",
+                          lambda: _restore(handle, title))
+        else:
+            undo.forget()
         return f"{action.replace('ise', 'ised').replace('ize', 'ized').capitalize()} {title}."
 
     if action == "close_window":
@@ -76,6 +106,7 @@ def control(action: str, amount: int = 0) -> str:
         # WM_CLOSE asks the program to close, which lets it prompt about
         # unsaved work. Killing the process would not.
         user32.PostMessageW(handle, 0x0010, 0, 0)
+        undo.forget()          # reo cannot unclose a program
         return f"Asked {title} to close."
 
     if action == "show_desktop":
@@ -83,9 +114,12 @@ def control(action: str, amount: int = 0) -> str:
         user32.keybd_event(0x5B, 0, 0, 0)        # left Windows key
         _tap(0x44)                                # D
         user32.keybd_event(0x5B, 0, KEYUP, 0)
+        # Win+D is its own reverse.
+        undo.remember("showing the desktop", lambda: control("show_desktop"))
         return "Showed the desktop."
 
     if action == "lock":
+        undo.forget()          # and reo certainly cannot unlock it
         _user32().LockWorkStation()
         return "Locked."
 

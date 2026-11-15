@@ -14,6 +14,7 @@ import datetime
 import operator
 import re
 
+from . import undo as undoing
 from .text import normalize
 
 # Spoken arithmetic, before the expression is parsed.
@@ -225,6 +226,11 @@ DOES = [
      lambda m: _control("close_window")),
     (r"lock (it|up|the (laptop|screen|computer|pc|machine)"
      r"|my (laptop|screen|computer|pc))", lambda m: _control("lock")),
+    # putting the last thing back
+    (r"undo( that| it| the last( thing| one)?)?"
+     r"|(can you |please )?(undo|reverse) (that|it|the last (thing|one))"
+     r"|put (that|it) back|take (that|it) back|reverse that",
+     lambda m: undoing.undo()),
     # opening things
     (r"(open|go to|visit|bring up) (?P<site>[a-z0-9][a-z0-9 -]*) (?P<tld>" + TLD + r")",
      _open_site),
