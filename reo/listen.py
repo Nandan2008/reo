@@ -423,7 +423,6 @@ class Listener:
             self.last_level = 0.0
             return ""
         self.last_level = float(np.max(np.abs(audio)))
-        self.last_audio = audio
         if self.last_level < DEAD_DEVICE:
             # Not a quiet room: nothing at all. Whisper invents words out of
             # this, and no amount of listening harder will help.

@@ -2623,5 +2623,88 @@ class AskingHowHeSounds(unittest.TestCase):
                 self.assertIn(normalize(said), main.HEARING_CHECK)
 
 
+class SearchingSomewhereElse(unittest.TestCase):
+    """Measured on a live run: duckduckgo, bing and brave were all answering
+    "No results found" while google answered fine. ddgs picks for itself when
+    asked for nothing in particular, so about a third of searches came back
+    empty and reo said it could not find anything."""
+
+    def setUp(self):
+        tools._search_cache.clear()
+        self.addCleanup(tools._search_cache.clear)
+
+    def _searching(self, works):
+        """works: the backends that have anything to say. None = the default."""
+        asked = []
+
+        def attempt(query, backend=None):
+            asked.append(backend)
+            if backend in works:
+                return [{"title": f"from {backend}", "body": "the answer"}]
+            return []
+
+        return attempt, asked
+
+    def test_the_default_is_tried_first_and_usually_enough(self):
+        attempt, asked = self._searching({None})
+        with mock.patch.object(tools, "_results", attempt):
+            out = tools.search_web("how tall is everest")
+        self.assertIn("the answer", out)
+        self.assertEqual(asked, [None], "asked elsewhere when it did not need to")
+
+    def test_it_walks_on_when_the_default_has_nothing(self):
+        attempt, asked = self._searching({"google"})
+        with mock.patch.object(tools, "_results", attempt):
+            out = tools.search_web("population of hyderabad")
+        self.assertIn("from google", out)
+        self.assertEqual(asked[0], None)
+        self.assertIn("google", asked)
+
+    def test_it_keeps_walking_past_a_dead_one(self):
+        attempt, asked = self._searching({"bing"})
+        with mock.patch.object(tools, "_results", attempt):
+            out = tools.search_web("price of gold")
+        self.assertIn("from bing", out)
+        self.assertGreater(len(asked), 2, "gave up before reaching bing")
+
+    def test_when_nothing_anywhere_has_it_he_is_told_where_it_looked(self):
+        attempt, asked = self._searching(set())
+        with mock.patch.object(tools, "_results", attempt):
+            out = tools.search_web("zzz nonsense query")
+        self.assertIn("No results", out)
+        self.assertIn("google", out)
+        self.assertEqual(len(asked), 1 + len(tools.SEARCH_BACKENDS))
+
+    def test_a_backend_that_throws_is_just_one_that_did_not_answer(self):
+        """So one library error does not end the whole search."""
+        class Broken:
+            def text(self, *args, **kwargs):
+                raise RuntimeError("the library fell over")
+
+        with mock.patch.object(tools, "_searcher", Broken()):
+            self.assertEqual(tools._results("x"), [])
+            self.assertEqual(tools._results("x", "google"), [])
+
+    def test_the_answer_is_remembered(self):
+        attempt, asked = self._searching({None})
+        with mock.patch.object(tools, "_results", attempt):
+            tools.search_web("same question")
+            tools.search_web("Same Question")
+        self.assertEqual(len(asked), 1, "paid for the same search twice")
+
+    def test_an_empty_answer_is_not_remembered(self):
+        """Or a backend being down for one minute poisons that query for the
+        rest of the session."""
+        attempt, _ = self._searching(set())
+        with mock.patch.object(tools, "_results", attempt):
+            tools.search_web("something")
+        self.assertNotIn("something", tools._search_cache)
+
+    def test_there_is_a_timeout_on_it(self):
+        """Nothing above run_tool has one, so a search that never came back
+        would hang the whole assistant mid-reply."""
+        self.assertTrue(getattr(tools, "SEARCH_TIMEOUT", 0) > 0)
+
+
 if __name__ == "__main__":
     unittest.main()

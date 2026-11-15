@@ -10,20 +10,6 @@ import psutil
 
 from . import config, pointer, system, workspace
 
-# Spoken name -> Windows command. Only these can be launched.
-APPS = {
-    "notepad": "notepad",
-    "calculator": "calc",
-    "file explorer": "explorer",
-    "explorer": "explorer",
-    "chrome": "chrome",
-    "edge": "msedge",
-    "vs code": "code",
-    "vscode": "code",
-    "settings": "ms-settings:",
-    "task manager": "taskmgr",
-    "paint": "mspaint",
-}
 
 
 def open_app(name: str) -> str:
@@ -45,6 +31,8 @@ def open_website(url: str) -> str:
 
 _searcher = None
 _search_cache = {}
+# Per attempt. Four backends are tried, so the worst case is four times this.
+SEARCH_TIMEOUT = 8
 
 # Wikipedia refuses a request that will not say who it is, and reo was getting
 # a flat 403 from the best reference on the web. Their policy asks for a
@@ -67,30 +55,57 @@ def warm_up() -> None:
     global _searcher
     try:
         from ddgs import DDGS
-        _searcher = DDGS()
+        _searcher = DDGS(timeout=SEARCH_TIMEOUT)
     except Exception as e:
         print(f"  [search] warm-up skipped: {e}")
 
 
+# Where to look, in order. ddgs picks for itself when asked for nothing in
+# particular, and on a measured run duckduckgo, bing and brave were all
+# answering "No results found" while google answered fine - so about a third
+# of searches came back empty and reo said it could not find anything. Asking
+# somewhere else costs a second and fixes it. Which one is up changes by the
+# week, so this is a list to walk, not a favourite to pin.
+SEARCH_BACKENDS = ["google", "duckduckgo", "bing", "brave"]
+
+
+def _results(query: str, backend=None):
+    """One attempt. Returns the rows, or [] for anything that went wrong."""
+    global _searcher
+    try:
+        if _searcher is None:
+            from ddgs import DDGS
+            # building one per search cost about 1.3s each time. The timeout
+            # matters more: nothing above run_tool has one, so a search that
+            # never came back would hang the whole assistant mid-reply.
+            _searcher = DDGS(timeout=SEARCH_TIMEOUT)
+        if backend is None:
+            return list(_searcher.text(query, max_results=4) or [])
+        return list(_searcher.text(query, max_results=4, backend=backend) or [])
+    except Exception:
+        return []
+
+
 def search_web(query: str) -> str:
     """Look something up and hand the text back, so reo can answer out loud."""
-    global _searcher
-
     key = query.strip().lower()
     if key in _search_cache:      # the model rewords and retries; don't pay twice
         return _search_cache[key]
 
-    try:
-        if _searcher is None:
-            from ddgs import DDGS
-            _searcher = DDGS()    # building one per search cost about 1.3s each time
-        results = _searcher.text(query, max_results=4)
-    except Exception as e:
-        return f"Could not search: {e}"
+    results = _results(query)
+    tried = []
+    for backend in SEARCH_BACKENDS:
+        if results:
+            break
+        tried.append(backend)
+        results = _results(query, backend)
 
     if not results:
-        return f"No results for {query}."
-    answer = "\n".join(f"{r['title']}: {r['body']}" for r in results)
+        return (f"No results for {query}. Searched " +
+                ", ".join(tried) + ".") if tried else f"No results for {query}."
+    if tried:
+        print(f"  [search] {tried[-1]} answered after the others did not")
+    answer = "\n".join(f"{r.get('title', '')}: {r.get('body', '')}" for r in results)
     _search_cache[key] = answer
     return answer
 

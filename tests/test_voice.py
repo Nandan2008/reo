@@ -104,8 +104,14 @@ class HearingHim(unittest.TestCase):
         cls.clip, _ = his_voice()
         if cls.clip is None:
             raise unittest.SkipTest("no diagnose.wav to test against")
-        # One model for the whole class: loading it is the slow part.
-        cls.listener = Listener()
+        # One model for the whole class: loading it is the slow part. But
+        # Listener() also opens the real microphone and holds it, which these
+        # tests never want and never closed - and an open PortAudio stream at
+        # interpreter shutdown can wedge the process. One run sat there for
+        # fifty eight minutes.
+        with mock.patch.object(config, "KEEP_MIC_OPEN", False):
+            cls.listener = Listener()
+        cls.addClassCleanup(cls.listener.mic.close)
 
     def setUp(self):
         self.listener.language, self.listener.detected = "en", True

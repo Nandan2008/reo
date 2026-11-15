@@ -13,6 +13,7 @@ import subprocess
 TIMEOUT = 25
 
 PS_OPEN = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $pattern = $env:REO_APP
 $shell = New-Object -ComObject WScript.Shell
 
@@ -42,6 +43,7 @@ Write-Output ('STARTED:' + $app.Name)
 """
 
 PS_LIST = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Get-StartApps | Select-Object -ExpandProperty Name | Sort-Object
 """
 
@@ -56,6 +58,10 @@ def _powershell(script: str, env: dict = None) -> str:
         done = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, timeout=TIMEOUT, env=environment,
+            # Without this the console code page decides, and reo read
+            # "µTorrent" back as "æTorrent" - which is then the name it
+            # would try to launch.
+            encoding="utf-8", errors="replace",
         )
     except subprocess.TimeoutExpired:
         return "TIMEOUT"
