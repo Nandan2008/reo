@@ -83,8 +83,10 @@ class Brain:
             # silence before reo said anything at all. The pool below is the
             # retry layer: another key answers at once, and with no other key
             # there is nothing to wait for that saying so would not do better.
+            patient = (config.LOCAL_TIMEOUT if provider.name == "ollama"
+                       else config.REQUEST_TIMEOUT)
             self._clients[index] = OpenAI(api_key=provider.key, base_url=provider.base_url,
-                                          timeout=config.REQUEST_TIMEOUT, max_retries=0)
+                                          timeout=patient, max_retries=0)
         return self._clients[index]
 
     def _ask(self, provider, client, with_tools: bool):

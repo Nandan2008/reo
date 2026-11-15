@@ -9,8 +9,11 @@ per-minute window has rolled over.
 Every provider here speaks the OpenAI wire format, so only the key, the URL and
 the model name change.
 """
+import json
 import os
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 from . import config
@@ -32,6 +35,65 @@ KNOWN = {
                "https://generativelanguage.googleapis.com/v1beta/openai/",
                "gemini-2.0-flash", "GEMINI_MODEL"),
 }
+
+
+# Ollama runs on this machine and has no key at all, so it is found by
+# asking rather than by reading one out of .env - a laptop that has it today
+# may not tomorrow. Nothing is sent anywhere and nothing is metered.
+OLLAMA = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+# Asking costs a local round trip, so the answer is kept for a while. Long
+# enough that it is not asked per reply, short enough that starting ollama
+# after reo does not mean restarting reo.
+LOCAL_RECHECK = 120.0
+_local_seen: tuple[float, object] = (0.0, False)
+
+
+def _ollama(path: str, body=None, timeout: float = 1.5):
+    """Ask the local ollama something, or None if it is not there."""
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(
+        OLLAMA + path, data=data,
+        headers={"Content-Type": "application/json"} if data else {})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as answer:
+            return json.loads(answer.read() or b"{}")
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def local_model(env=None) -> str | None:
+    """A model on this machine that can call tools, or None.
+
+    The capability matters more than the name. reo is nothing but tool calls,
+    and a model without them answers every single question with a sentence
+    about how it cannot do that - his llama3 refuses outright, with
+    "llama3:latest does not support tools".
+    """
+    env = os.environ if env is None else env
+    wanted = (env.get("REO_OLLAMA_MODEL") or "").strip()
+    listed = _ollama("/api/tags")
+    if not listed:
+        return None
+    names = [m.get("name") for m in listed.get("models", []) if m.get("name")]
+    if wanted:
+        names = [n for n in names if n == wanted or n.split(":")[0] == wanted.split(":")[0]]
+    for name in names:
+        shown = _ollama("/api/show", {"model": name}, timeout=4.0)
+        if shown and "tools" in (shown.get("capabilities") or []):
+            return name
+    return None
+
+
+def local(env=None) -> Provider | None:
+    """Ollama as a provider, if it is running here with a usable model."""
+    global _local_seen
+    when, found = _local_seen
+    if time.time() - when > LOCAL_RECHECK:
+        name = local_model(env)
+        found = Provider("ollama", "ollama-needs-no-key",
+                         OLLAMA + "/v1", name) if name else None
+        _local_seen = (time.time(), found)
+    return found or None
 
 
 @dataclass(frozen=True)
@@ -83,6 +145,17 @@ def build(env=None) -> list[Provider]:
     for name, (var, base_url, model, model_var) in KNOWN.items():
         add(name, env.get(var), base_url, env.get(model_var) or model)
 
+    # The machine's own model goes last: it answers when everything else has
+    # hit its limit, which turns "I have used up my allowance" into an answer.
+    # REO_PREFER_LOCAL=1 puts it first instead - slower and less sure with
+    # twenty six tools, but nothing leaves the laptop and nothing is counted.
+    here = local(env)
+    if here is not None:
+        if env.get("REO_PREFER_LOCAL", "0") not in ("0", "false", "no"):
+            found.insert(0, here)
+        else:
+            found.append(here)
+
     return found
 
 
@@ -132,7 +205,7 @@ def hosting(model: str, env=None) -> Provider | None:
     Orpheus, the expressive voice, lives at Groq alone, so it still needs the
     Groq key after reo's thinking has moved to another provider.
     """
-    found = build(env)
+    found = [p for p in build(env) if p.name != "ollama"]   # ollama has no voice
     host = next((h for prefix, h in EXCLUSIVE.items() if model.startswith(prefix)), None)
     if host is None:
         return found[0] if found else None

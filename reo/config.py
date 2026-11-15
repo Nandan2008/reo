@@ -15,6 +15,11 @@ REQUEST_TIMEOUT = float(os.getenv("REO_REQUEST_TIMEOUT", "25"))
 # of writing one. It is a ceiling, not a target: a reply that does not need
 # the room does not spend it.
 MAX_REPLY_TOKENS = int(os.getenv("REO_MAX_REPLY_TOKENS", "2600"))
+# The model on this machine gets far longer, because the first question after
+# a gap has to load five gigabytes into the graphics card: measured at 57.8s
+# cold against 0.5s warm. Twenty five seconds would fail every cold start,
+# and failing is worse than waiting when the alternative is no answer at all.
+LOCAL_TIMEOUT = float(os.getenv("REO_LOCAL_TIMEOUT", "180"))
 # How hard a reasoning model should think before a one-sentence answer.
 # "low", "medium", "high", or blank to leave it to the model.
 REASONING_EFFORT = os.getenv("REO_REASONING", "low").strip()

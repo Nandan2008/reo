@@ -616,9 +616,18 @@ class ProviderPool(unittest.TestCase):
         self.assertEqual({p.base_url for p in spares}, {self.ENV["LLM_BASE_URL"]})
 
     def test_known_providers_come_after(self):
-        found = providers.build(self.ENV)
+        with mock.patch.object(providers, "local", lambda env=None: None):
+            found = providers.build(self.ENV)
         self.assertEqual(found[-1].name, "llama")
         self.assertIn("api.llama.com", found[-1].base_url)
+
+    def test_the_local_model_comes_after_even_those(self):
+        """It is the last resort, not the first choice."""
+        here = providers.Provider("ollama", "x", "http://localhost:11434/v1", "q:7b")
+        with mock.patch.object(providers, "local", lambda env=None: here):
+            found = providers.build(self.ENV)
+        self.assertEqual(found[-1].name, "ollama")
+        self.assertEqual(found[-2].name, "llama")
 
     def test_blank_keys_are_not_providers(self):
         names = [p.name for p in providers.build(self.ENV)]
@@ -629,8 +638,17 @@ class ProviderPool(unittest.TestCase):
         keys = [p.key for p in providers.build(env)]
         self.assertEqual(len(keys), len(set(keys)))
 
-    def test_no_keys_means_no_providers(self):
-        self.assertEqual(providers.build({"LLM_API_KEY": ""}), [])
+    def test_no_keys_and_nothing_local_means_no_providers(self):
+        with mock.patch.object(providers, "local", lambda env=None: None):
+            self.assertEqual(providers.build({"LLM_API_KEY": ""}), [])
+
+    def test_a_local_model_is_enough_on_its_own(self):
+        """No key at all, but something running here: reo still works, and
+        nothing it is asked ever leaves the laptop."""
+        here = providers.Provider("ollama", "x", "http://localhost:11434/v1", "q:7b")
+        with mock.patch.object(providers, "local", lambda env=None: here):
+            found = providers.build({"LLM_API_KEY": ""})
+        self.assertEqual([p.name for p in found], ["ollama"])
 
     def test_a_benched_key_is_skipped(self):
         pool = providers.Pool(providers.build(self.ENV))
@@ -2253,6 +2271,154 @@ class AllowanceRunsOut(unittest.TestCase):
                                lambda **kw: made.update(kw) or SimpleNamespace()):
             brain._client(0, providers.Provider("p", "k", "https://p.invalid", "m"))
         self.assertEqual(made.get("max_retries"), 0)
+
+
+class TheModelOnThisMachine(unittest.TestCase):
+    """Ollama has no key - it is this laptop - so it is found by asking.
+
+    The capability is what matters, not the name: reo is nothing but tool
+    calls, and his llama3 refuses them outright with "llama3:latest does not
+    support tools".
+    """
+
+    def setUp(self):
+        providers._local_seen = (0.0, False)
+        self.addCleanup(setattr, providers, "_local_seen", (0.0, False))
+
+    def _ollama(self, tags, capabilities):
+        """Stand in for the local ollama's two endpoints."""
+        asked = []
+
+        def answer(path, body=None, timeout=1.5):
+            asked.append(path)
+            if path == "/api/tags":
+                return tags
+            if path == "/api/show":
+                return {"capabilities": capabilities.get(body["model"], [])}
+            return None
+
+        return answer, asked
+
+    def test_nothing_running_is_not_an_error(self):
+        with mock.patch.object(providers, "_ollama", lambda *a, **kw: None):
+            self.assertIsNone(providers.local_model({}))
+            self.assertIsNone(providers.local({}))
+
+    def test_a_model_without_tools_is_no_use(self):
+        answer, _ = self._ollama({"models": [{"name": "llama3:latest"}]},
+                                 {"llama3:latest": ["completion"]})
+        with mock.patch.object(providers, "_ollama", answer):
+            self.assertIsNone(providers.local_model({}))
+
+    def test_a_model_with_tools_is_taken(self):
+        answer, _ = self._ollama({"models": [{"name": "qwen2.5:7b"}]},
+                                 {"qwen2.5:7b": ["completion", "tools"]})
+        with mock.patch.object(providers, "_ollama", answer):
+            self.assertEqual(providers.local_model({}), "qwen2.5:7b")
+
+    def test_the_one_that_can_is_picked_out_of_several(self):
+        answer, _ = self._ollama(
+            {"models": [{"name": "llama3:latest"}, {"name": "qwen2.5:7b"}]},
+            {"llama3:latest": ["completion"], "qwen2.5:7b": ["tools"]})
+        with mock.patch.object(providers, "_ollama", answer):
+            self.assertEqual(providers.local_model({}), "qwen2.5:7b")
+
+    def test_a_named_model_wins(self):
+        answer, _ = self._ollama(
+            {"models": [{"name": "qwen2.5:7b"}, {"name": "llama3.1:8b"}]},
+            {"qwen2.5:7b": ["tools"], "llama3.1:8b": ["tools"]})
+        with mock.patch.object(providers, "_ollama", answer):
+            self.assertEqual(
+                providers.local_model({"REO_OLLAMA_MODEL": "llama3.1:8b"}),
+                "llama3.1:8b")
+
+    def test_it_is_not_asked_again_for_every_reply(self):
+        """hosting() calls build() on every single spoken reply."""
+        answer, asked = self._ollama({"models": [{"name": "q:7b"}]},
+                                     {"q:7b": ["tools"]})
+        with mock.patch.object(providers, "_ollama", answer):
+            providers.local({})
+            first = len(asked)
+            providers.local({})
+            providers.local({})
+            self.assertEqual(len(asked), first, "asked ollama again")
+
+    def _with_local(self, env):
+        answer, _ = self._ollama({"models": [{"name": "qwen2.5:7b"}]},
+                                 {"qwen2.5:7b": ["tools"]})
+        base = {"LLM_API_KEY": "k", "LLM_BASE_URL": "https://api.groq.com/openai/v1",
+                "LLM_MODEL": "openai/gpt-oss-120b"}
+        with mock.patch.object(providers, "_ollama", answer):
+            return providers.build({**base, **env})
+
+    def test_the_hosted_model_answers_first_by_default(self):
+        """It is better with twenty six tools. Local is what answers when the
+        allowance has run out, which is the thing that was going wrong."""
+        found = self._with_local({})
+        self.assertEqual([p.name for p in found], ["groq", "ollama"])
+
+    def test_preferring_local_puts_it_first(self):
+        found = self._with_local({"REO_PREFER_LOCAL": "1"})
+        self.assertEqual([p.name for p in found][0], "ollama")
+
+    def test_the_local_one_needs_no_key_in_env(self):
+        found = self._with_local({})
+        here = next(p for p in found if p.name == "ollama")
+        self.assertTrue(here.key, "the client needs some string for a key")
+        self.assertIn("localhost", here.base_url)
+        self.assertTrue(here.base_url.endswith("/v1"))
+
+    def test_the_voice_is_never_asked_of_it(self):
+        """Ollama does text, not speech, and Orpheus is Groq's alone."""
+        answer, _ = self._ollama({"models": [{"name": "qwen2.5:7b"}]},
+                                 {"qwen2.5:7b": ["tools"]})
+        env = {"LLM_API_KEY": "k", "LLM_BASE_URL": "https://api.groq.com/openai/v1",
+               "LLM_MODEL": "m", "REO_PREFER_LOCAL": "1"}
+        with mock.patch.object(providers, "_ollama", answer):
+            voice = providers.hosting("canopylabs/orpheus-v1-english", env)
+        self.assertIsNotNone(voice)
+        self.assertNotEqual(voice.name, "ollama")
+        self.assertIn("groq", voice.base_url)
+
+    def test_a_rate_limited_groq_falls_through_to_it(self):
+        """The whole point: an answer instead of an apology."""
+        spoke = []
+        brain = Brain.__new__(Brain)
+        brain.history = []
+        brain._clients = {}
+        brain.pool = providers.Pool([
+            providers.Provider("groq", "k", "https://api.groq.com/openai/v1", "m"),
+            providers.Provider("ollama", "x", "http://localhost:11434/v1", "qwen2.5:7b"),
+        ])
+
+        def ask(provider, client, with_tools):
+            spoke.append(provider.name)
+            if provider.name == "groq":
+                raise RateLimitError("429", response=SimpleNamespace(
+                    status_code=429, request=None, headers={}), body=None)
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(tool_calls=None, content="[neutral] Done."),
+                finish_reason="stop")])
+
+        brain._ask = ask
+        brain._client = lambda index, provider: None
+        answer = brain._complete(with_tools=True)
+        self.assertEqual(spoke, ["groq", "ollama"])
+        self.assertEqual(answer.choices[0].message.content, "[neutral] Done.")
+
+    def test_reasoning_effort_is_not_sent_to_it(self):
+        """That setting is a gpt-oss one and other models reject it."""
+        sent = {}
+        brain = Brain.__new__(Brain)
+        brain.history = []
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+            create=lambda **kw: sent.update(kw) or SimpleNamespace(
+                usage=None, choices=[]))))
+        here = providers.Provider("ollama", "x", "http://localhost:11434/v1",
+                                  "qwen2.5:7b")
+        with mock.patch.object(providers, "remember", lambda p: None):
+            brain._ask(here, client, with_tools=False)
+        self.assertNotIn("reasoning_effort", sent)
 
 
 if __name__ == "__main__":
