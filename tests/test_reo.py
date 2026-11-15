@@ -2421,5 +2421,207 @@ class TheModelOnThisMachine(unittest.TestCase):
         self.assertNotIn("reasoning_effort", sent)
 
 
+class TheMomentBeforeTheKey(unittest.TestCase):
+    """Keeping the 0.8s before the key press is what stops the first word
+    being clipped. Letting it decide he had STARTED talking was a bug: he got
+    1.5s to begin instead of six, and then "didn't catch that"."""
+
+    def _waited(self, voice_before_the_press):
+        """Seconds of live audio reo sat through before giving up."""
+        import sounddevice as sd
+        size = listen.BLOCK_SAMPLES
+        pre = [np.zeros((size, 1), dtype=np.float32) for _ in range(12)]
+        seen = {"blocks": 0}
+
+        class Stream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+            def read(self, n):
+                time.sleep(0.001)
+                return np.zeros((size, 1), dtype=np.float32), False
+
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.transcribe_seconds = 0.0
+        listener._guess = None
+        listener.missed = ""
+        listener._mic = Microphone(keep_open=False)
+        listener._voice = SimpleNamespace(ready=True, reset=lambda: None)
+        listener._transcribe = lambda raw: ""
+
+        def ears(block, mid_sentence):
+            seen["blocks"] += 1
+            if seen["blocks"] <= len(pre):
+                return voice_before_the_press
+            return False                     # he has not started yet
+
+        listener._voiced = ears
+        begin = Microphone.start
+
+        def with_preroll(self):
+            got = begin(self)
+            return pre if got is not None else got
+
+        with mock.patch.object(sd, "InputStream", lambda **kw: Stream()), \
+             mock.patch.object(Microphone, "start", with_preroll), \
+             mock.patch.object(config, "WAIT_FOR_SPEECH_SECONDS", 1.2):
+            listener._record(stop_now=lambda: False)
+        return (seen["blocks"] - len(pre)) * listen.BLOCK_SECONDS, listener
+
+    def test_a_voice_before_the_press_does_not_start_the_clock(self):
+        quiet, _ = self._waited(voice_before_the_press=False)
+        noisy, _ = self._waited(voice_before_the_press=True)
+        self.assertAlmostEqual(noisy, quiet, delta=0.3,
+                               msg="the pre-roll cut his thinking time short")
+
+    def test_he_still_gets_the_whole_window(self):
+        waited, _ = self._waited(voice_before_the_press=True)
+        self.assertGreater(waited, 1.0)
+
+    def test_and_it_is_still_kept_so_the_first_word_survives(self):
+        """The pre-roll audio has to end up in the recording even though it
+        no longer votes on whether he was speaking."""
+        import sounddevice as sd
+        size = listen.BLOCK_SAMPLES
+        pre = [np.full((size, 1), 0.2, dtype=np.float32) for _ in range(4)]
+        calls = {"n": 0}
+
+        class Stream:
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+            def read(self, n):
+                time.sleep(0.001)
+                return np.full((size, 1), 0.3, dtype=np.float32), False
+
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.transcribe_seconds = 0.0
+        listener._guess = None
+        listener.missed = ""
+        listener._mic = Microphone(keep_open=False)
+        listener._voice = SimpleNamespace(ready=True, reset=lambda: None)
+        listener._transcribe = lambda raw: ""
+
+        def ears(block, mid_sentence):
+            calls["n"] += 1
+            return calls["n"] <= 10          # speaking, then stops
+
+        listener._voiced = ears
+        begin = Microphone.start
+
+        def with_preroll(self):
+            got = begin(self)
+            return pre if got is not None else got
+
+        with mock.patch.object(sd, "InputStream", lambda **kw: Stream()), \
+             mock.patch.object(Microphone, "start", with_preroll):
+            audio = listener._record(stop_now=lambda: False)
+        self.assertIsNotNone(audio)
+        self.assertGreaterEqual(len(audio), size * len(pre),
+                                "the pre-roll was dropped from the recording")
+
+
+class WhyItWasMissed(unittest.TestCase):
+    """A muted microphone, a silent room, a mumble and whisper inventing
+    words all printed "didn't catch that", and they need different fixes."""
+
+    def _listener(self, audio, transcribes=""):
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.transcribe_seconds = 0.0
+        listener._guess = None
+        listener.missed = ""
+        listener.last_voice = 1.0
+        listener._record = lambda stop_now=None: audio
+        listener._transcribe = lambda raw: transcribes
+        return listener
+
+    def test_a_dead_device_says_so(self):
+        listener = self._listener(np.zeros(16000, dtype=np.float32))
+        listener.listen()
+        self.assertEqual(listener.missed, "silent")
+
+    def test_a_mumble_is_called_quiet(self):
+        faint = np.full(16000, 0.005, dtype=np.float32)
+        listener = self._listener(faint, transcribes="")
+        listener.listen()
+        self.assertEqual(listener.missed, "quiet")
+
+    def test_whisper_inventing_words_is_called_garbled(self):
+        listener = self._listener(np.full(16000, 0.07, dtype=np.float32))
+        listener._transcribe = Listener._transcribe.__get__(listener)
+        listener._voice = SimpleNamespace(ready=True)
+        listener._model_lock = threading.Lock()
+        listener.model = SimpleNamespace(transcribe=lambda *a, **kw: (
+            iter([SimpleNamespace(text=" again and again and again and again",
+                                  no_speech_prob=0.0)]), None))
+        listener.listen()
+        self.assertEqual(listener.missed, "garbled")
+
+    def test_a_good_command_leaves_no_complaint(self):
+        listener = self._listener(np.full(16000, 0.07, dtype=np.float32),
+                                  transcribes="open chrome")
+        self.assertEqual(listener.listen(), "open chrome")
+        self.assertEqual(listener.missed, "")
+
+    def test_every_reason_has_something_to_say(self):
+        for reason in ("silent", "nothing", "noise", "quiet", "garbled", "unclear"):
+            self.assertIn(reason, listen.MISSED)
+            self.assertTrue(listen.MISSED[reason].strip())
+
+
+class AskingHowHeSounds(unittest.TestCase):
+    """"Can you hear me" should be answered by measurement, not by the model
+    guessing - and measured on what he just said, not on a fresh recording."""
+
+    def _report(self, level, voice):
+        listener = Listener.__new__(Listener)
+        listener.last_level, listener.last_voice = level, voice
+        return listener.how_i_hear_you()
+
+    def test_a_muted_microphone_is_named_as_such(self):
+        said = self._report(0.0, 0.0)
+        self.assertIn("silence", said.lower())
+        self.assertIn("muted", said.lower())
+
+    def test_a_room_with_no_voice_in_it(self):
+        said = self._report(0.004, 0.0)
+        self.assertIn("no voice", said.lower())
+
+    def test_too_quiet_tells_him_what_to_do(self):
+        said = self._report(0.008, 1.0)
+        self.assertTrue("closer" in said.lower() or "turn the microphone up" in said.lower())
+
+    def test_a_normal_voice_is_reassuring(self):
+        said = self._report(0.07, 2.0)
+        self.assertIn("clearly", said.lower())
+        self.assertIn("nothing wrong", said.lower())
+
+    def test_the_numbers_are_in_there(self):
+        """So he can tell "a bit quiet" from "nearly nothing"."""
+        self.assertIn("0.020", self._report(0.02, 1.4))
+
+    def test_it_never_reaches_the_model(self):
+        said = []
+        listener = Listener.__new__(Listener)
+        listener.last_level, listener.last_voice = 0.07, 2.0
+        listener.transcribe_seconds = 0.0
+        brain = SimpleNamespace(history=[], think=mock.Mock(
+            side_effect=AssertionError("the model was asked")))
+        with mock.patch.object(main, "speak",
+                               lambda text, ui=None, until=None: said.append(text)):
+            main.handle(brain, "can you hear me", None, 0.0, listener, None)
+        brain.think.assert_not_called()
+        self.assertTrue(said and "clearly" in said[0].lower())
+
+    def test_the_usual_ways_of_asking_are_covered(self):
+        for said in ["can you hear me", "Can you hear me?", "mic check",
+                     "microphone check", "how do i sound", "test the microphone"]:
+            with self.subTest(said=said):
+                self.assertIn(normalize(said), main.HEARING_CHECK)
+
+
 if __name__ == "__main__":
     unittest.main()

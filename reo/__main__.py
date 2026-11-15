@@ -8,12 +8,22 @@ import threading
 from . import config, fastpath, providers
 from .stats import session as stats
 from .brain import Brain, OutOfAllowance
-from .listen import Listener
+from .listen import MISSED, Listener
 from .speak import speak
 from . import tools
 from .text import is_speech, normalize
 
 EXIT_PHRASES = {"goodbye", "bye", "exit", "quit", "stop listening", "goodbye reo", "bye reo"}
+
+# Asked this, reo reports on the recording he has just made rather than on the
+# microphone in the abstract: the real thing, at his real distance, with
+# whatever the room was doing at the time. It never reaches the model.
+HEARING_CHECK = {
+    "can you hear me", "do you hear me", "microphone check", "mic check",
+    "microphone test", "mic test", "sound check", "test the microphone",
+    "how do i sound", "how am i coming through", "can you hear me ok",
+    "can you hear me okay", "are you hearing me", "check the microphone",
+}
 
 
 def _tee_to_logfile():
@@ -144,6 +154,13 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
     # thinking counts too: he wants to interject, and the reply he no longer
     # wants should not be read out first.
     cut_in = _interrupt_watch(toggle)
+
+    if normalize(text) in HEARING_CHECK and listener is not None:
+        spoke = _said(listener.how_i_hear_you(), ui, toggle, cut_in)
+        stats.add_reply(heard_in, 0.0, spoke, used_model=False)
+        print(f"  [time] {_heard_detail(heard_in, listener)}  "
+              f"answered directly (no model)  spoke {spoke:.1f}s")
+        return True
 
     if normalize(text) in EXIT_PHRASES:
         speak("Goodbye.", ui)
@@ -307,11 +324,10 @@ def _loop(listener, brain, waker, toggle, combination, ui):
             text = ""
 
         if not is_speech(text):
-            # A muted microphone and a mumbled sentence look identical from
-            # here, and they need completely different things done about them.
-            note = ("the microphone is giving back silence - check it is not muted"
-                    if getattr(listener, "heard_nothing", False)
-                    else "(didn't catch that)")
+            # A muted microphone, a silent room, a mumble and whisper
+            # inventing words all printed the same line, and they need
+            # completely different things done about them.
+            note = MISSED.get(getattr(listener, "missed", ""), MISSED["unclear"])
             print(note)
             if ui:
                 ui.line("note", note)

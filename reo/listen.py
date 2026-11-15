@@ -23,6 +23,22 @@ LANGUAGE_CONFIDENCE = 0.75
 # silent room to exactly 0.0 and reads about 0.00003 when muted, against a
 # peak near 0.06 when he speaks.
 DEAD_DEVICE = 1e-4
+# Roughly where his voice sits, measured on this laptop: the room reads about
+# 0.0012 and ordinary speech peaks around 0.06.
+CLEARLY = 0.030
+FAINTLY = 0.012
+
+# "Didn't catch that" covered a muted microphone, a silent room, a mumble and
+# whisper inventing words, which need completely different things done about
+# them. Each of these is a different problem with a different fix.
+MISSED = {
+    "silent": "the microphone is giving back silence - check it is not muted",
+    "nothing": "nothing was said after the key",
+    "noise": "I heard the room, but no voice in it",
+    "quiet": "that was too quiet to make out",
+    "garbled": "that came back as noise rather than words",
+    "unclear": "(didn't catch that)",
+}
 
 
 def _shut(stream) -> None:
@@ -193,6 +209,14 @@ class Attempt:
 
 
 class Listener:
+    # Defaults on the class, so an instance built without __init__ - which the
+    # tests do, to get at one method without a model or a microphone - still
+    # has them.
+    missed = ""              # why the last command came to nothing
+    last_level = 0.0         # how loud he was, 0 to 1
+    last_voice = 0.0         # seconds of it the detector called speech
+    heard_nothing = False    # the device handed back digital zero
+
     def __init__(self):
         print("Loading speech model (first run downloads it)...")
         self.model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
@@ -203,6 +227,9 @@ class Listener:
         self.language = config.LANGUAGE
         self.detected = False
         self.transcribe_seconds = 0.0    # what the last transcription cost
+        self.missed = ""                 # why the last one came to nothing
+        self.last_level = 0.0            # how loud he was, 0 to 1
+        self.last_voice = 0.0            # seconds the detector called speech
         self._warm_up()
         # Pay the half second for the device now, while he is not waiting on it.
         if self.mic.keep_open:
@@ -262,8 +289,10 @@ class Listener:
         """Capture one utterance. Leaves a head start on self._guess when the
         transcription could be begun during the pause at the end."""
         self._guess = None
+        self.missed = "unclear"
         before = self.mic.start()
         if before is None:
+            self.missed = "silent"
             return None
 
         max_blocks = int(config.MAX_RECORD_SECONDS / BLOCK_SECONDS)
@@ -276,16 +305,25 @@ class Listener:
         early_blocks = max(1, round(config.EARLY_GUESS_SECONDS / BLOCK_SECONDS))
 
         self.voice.reset()
-        frames, heard, silent = [], False, 0
+        frames, heard, silent, voiced = [], False, 0, 0
         asked_to_stop = nothing_said = stale = False
         guess = None
 
-        # The moment before the key press, through the detector as well: he may
-        # already have been talking when he reached for the key.
+        # The moment before the key press is kept, so the start of a word is
+        # not lost, and it is fed through the detector so the detector has
+        # some context. But it is NOT allowed to decide that he has started
+        # talking. It used to be, and that was a bug: anything voice-like in
+        # that 0.8s - a television, a throat clear, the tail of reo's own last
+        # reply - started the silence countdown immediately, so he had 1.5s to
+        # begin instead of six, and then got "didn't catch that". Measured at
+        # 1.47s against 6.02s.
+        #
+        # Nothing is lost by this. If he really was mid-word when he reached
+        # for the key, the live blocks that follow are speech too, and heard
+        # goes true on the very next one.
         for block in before:
             frames.append(block)
-            if self._voiced(block, mid_sentence=heard and not silent):
-                heard = True
+            self._voiced(block, mid_sentence=False)
 
         try:
             for i in range(max_blocks):
@@ -300,6 +338,7 @@ class Listener:
                     continue
                 frames.append(block)
                 if self._voiced(block, mid_sentence=heard and not silent):
+                    voiced += 1
                     # Talking again, so whatever was transcribed in the pause
                     # is half a sentence. Throw it away.
                     stale = stale or guess is not None
@@ -319,12 +358,15 @@ class Listener:
         finally:
             self.mic.done()
 
+        self.last_voice = voiced * BLOCK_SECONDS
         if nothing_said or not frames:
+            self.missed = "nothing" if nothing_said else "unclear"
             return None
         # When they pressed the key to stop, transcribe what was captured even if
         # no voice was ever found in it. A quiet microphone kept "heard" false,
         # so every deliberate recording was binned as "didn't catch that".
         if not (heard or (asked_to_stop and len(frames) * BLOCK_SECONDS >= 0.4)):
+            self.missed = "noise"
             return None
         if guess is not None and not stale:
             self._guess = guess
@@ -368,18 +410,25 @@ class Listener:
                 if getattr(s, "no_speech_prob", 0.0) <= config.NO_SPEECH_PROB).strip()
         finally:
             self._one_at_a_time.release()
-        return "" if au.looks_hallucinated(text) else text
+        if au.looks_hallucinated(text):
+            self.missed = "garbled"
+            return ""
+        return text
 
     def listen(self, stop_now=None) -> str:
         audio = self._record(stop_now)
         self.transcribe_seconds = 0.0
         self.heard_nothing = False
         if audio is None:
+            self.last_level = 0.0
             return ""
-        if float(np.max(np.abs(audio))) < DEAD_DEVICE:
+        self.last_level = float(np.max(np.abs(audio)))
+        self.last_audio = audio
+        if self.last_level < DEAD_DEVICE:
             # Not a quiet room: nothing at all. Whisper invents words out of
             # this, and no amount of listening harder will help.
             self.heard_nothing = True
+            self.missed = "silent"
             print("  [listen] the microphone gave back silence - is it muted?")
             return ""
 
@@ -399,9 +448,35 @@ class Listener:
         if not text:
             # Nothing usable came back. If the language was a guess, it may have
             # been the wrong guess, so let the next utterance decide again.
+            if self.missed in ("", "unclear"):
+                self.missed = ("quiet" if self.last_level < FAINTLY else "unclear")
             self._forget_language()
             return ""
+        self.missed = ""
         return text
+
+    def how_i_hear_you(self) -> str:
+        """What the last thing he said looked like from in here.
+
+        Measured on the recording he has just made rather than asking him to
+        say something else: it is the real thing, at his real distance, with
+        whatever the room was doing at the time.
+        """
+        level, voice = self.last_level, self.last_voice
+        if level < DEAD_DEVICE:
+            return ("The microphone is giving me digital silence. Check it is "
+                    "not muted, and that nothing else has taken it.")
+        if not voice:
+            return (f"I can hear the room, but found no voice in it. The level "
+                    f"was {level:.3f}, where speech is usually around 0.06.")
+        if level < FAINTLY:
+            return (f"Only just. You came through at {level:.3f}, where I expect "
+                    f"about 0.06. Try closer, or turn the microphone up.")
+        if level < CLEARLY:
+            return (f"Quietly, but I got you: {level:.3f}, with {voice:.1f} "
+                    f"seconds of voice in it.")
+        return (f"Clearly. {level:.3f}, with {voice:.1f} seconds of voice in it. "
+                f"Nothing wrong with the microphone.")
 
     def _choose_language(self, audio) -> None:
         """Work out the language once, choosing only among the ones spoken here.
