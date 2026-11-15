@@ -359,6 +359,35 @@ What it still cannot do: see your screen or your email.
 - "Open YouTube"
 - "Search for best Python books"
 
+## What was taken from where
+
+Three ideas came from open-source assistants rather than from here. Each one
+is named in the file that uses it, so it is findable from the code and not
+only from this list.
+
+**jarvis-py** - the fast path, in `reo/fastpath.py`. Route deterministically
+first and only pay for the model when the phrasing is actually fuzzy. Asked
+the time, reo was making a round trip to Groq, a tool call and a second round
+trip, for something the machine already knew. The version here is its idea
+with whole-utterance matching added, because a keyword search hijacks "what
+time is it in Tokyo", and later extended from answering to acting: "turn it
+up" was 1.90s through the model and is 0.00s now.
+
+**OpenJarvis** - the SYSTEM panel beside the conversation, in `reo/stats.py`.
+Counters for what the session has cost, where a plain assistant shows
+nothing.
+
+**stark-systems** - one rule about the window, which is in the comments of
+`reo/hud/index.html`: never animate anything blurred or shadowed. The first
+reactor here ignored it and paid for a 34px blur and two large box-shadows
+being re-rasterised every frame, because the elements carrying them were
+scaling. The reactor now has no `shadowBlur` anywhere and uses additive
+compositing for the glow instead.
+
+Everything else - the voice detection, the pre-roll, transcribing inside the
+pause, the provider pool, the workspace, undo - is this project's own, and
+most of it exists because something measurable was wrong.
+
 ## Troubleshooting
 - Reo doesn't hear you: lower REO_SILENCE_THRESHOLD in .env (e.g. 0.005).
 - It cuts you off or never stops listening: raise it (e.g. 0.02).

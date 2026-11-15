@@ -2,8 +2,8 @@
 
 Asked the time, reo was making a round trip to Groq, a tool call, and a second
 round trip - about two seconds for something the machine knows instantly. The
-pattern comes from other assistants: route deterministically first, and only pay
-for the model when the phrasing is actually fuzzy.
+pattern is jarvis-py's: route deterministically first, and only pay for the
+model when the phrasing is actually fuzzy.
 
 Every pattern here matches the WHOLE utterance. A keyword search would hijack
 "what time is it in Tokyo" or "how is my battery life compared to last year",
