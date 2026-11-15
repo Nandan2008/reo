@@ -271,6 +271,20 @@ because Windows moves it two notches a press and one press is inaudible.
 Closing asks the program with WM_CLOSE rather than killing it, so it still
 gets to prompt about unsaved work.
 
+## Asking it about itself
+
+"Who made you", "what can you do", "how do I stop you", "what model are you
+using", "where do you put the files". None of these reach the model, because
+guessing about yourself goes wrong in a particular way: asked who made it,
+reo said OpenAI three times running and kept saying it after being corrected,
+and asked how to end the program it said to say "stop", which does nothing.
+
+The answers are assembled from what is true at the time - the hotkey from
+config, the words that actually stop it from the list that actually stops it,
+the model from whichever one last answered - so they cannot drift from the
+code, and they still work when the allowance is spent, which is exactly when
+someone is most likely to be asking what is going on.
+
 ## Taking it back
 
 Reo is driven by speech, and speech mishears. "Turn it down" comes back as

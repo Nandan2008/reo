@@ -3142,5 +3142,86 @@ class PuttingItBack(unittest.TestCase):
                 self.assertIsNone(fastpath.answer(said))
 
 
+class KnowingWhatItIs(unittest.TestCase):
+    """From his own log: asked who made it, reo said OpenAI three times and
+    kept saying it after he corrected it. Asked how to end the program, it
+    told him to say "stop", which is not one of the words that works.
+
+    Guessing about yourself goes wrong in a way that guessing about the
+    weather does not, and none of it needs a model.
+    """
+
+    def test_he_made_it(self):
+        said = fastpath.answer("who created you")
+        self.assertIsNotNone(said)
+        self.assertIn("you did", said.lower())
+
+    def test_it_names_no_company(self):
+        """The one thing the system prompt asks of it, which it ignored."""
+        for asked in ["who created you", "who made you", "who built you",
+                      "who are you", "what model are you using",
+                      "what are you built on", "what can you do"]:
+            with self.subTest(asked=asked):
+                said = (fastpath.answer(asked) or "").lower()
+                for company in ("openai", "anthropic", "google", "meta", "groq's gpt"):
+                    self.assertNotIn(company, said)
+
+    def test_the_words_it_gives_for_stopping_actually_work(self):
+        """It told him to say "stop". That does nothing."""
+        said = fastpath.answer("how do i stop you")
+        self.assertIsNotNone(said)
+        offered = {w.strip(" .") for w in
+                   said.lower().split("say ")[1].split(".")[0].replace(" or ", ", ").split(",")}
+        self.assertTrue(offered)
+        for word in offered:
+            self.assertIn(word, main.EXIT_PHRASES,
+                          f"it offers {word!r}, which does nothing")
+
+    def test_it_knows_how_it_is_summoned(self):
+        said = fastpath.answer("who are you")
+        with mock.patch.object(config, "MODE", "hotkey"):
+            self.assertIn("ctrl", fastpath.answer("who are you").lower())
+        self.assertIn("reo", said.lower())
+
+    def test_it_knows_which_model_is_answering(self):
+        with mock.patch.object(providers, "active_label", lambda: "qwen2.5:7b"):
+            said = fastpath.answer("what model are you using")
+        self.assertIn("qwen2.5:7b", said)
+
+    def test_it_knows_where_it_writes(self):
+        with mock.patch.object(config, "WORKSPACE", r"C:\somewhere\else"):
+            self.assertIn(r"C:\somewhere\else",
+                          fastpath.answer("where do you put the files"))
+
+    def test_it_says_undo_exists(self):
+        """He never knew, because it was never mentioned anywhere he would
+        hear it."""
+        self.assertIn("undo", fastpath.answer("what can you do").lower())
+
+    def test_none_of_it_reaches_the_model(self):
+        for asked in ["who created you", "who are you", "what can you do",
+                      "how do i stop you", "what model are you using",
+                      "where do you put the files", "whats your name",
+                      "tell me about yourself", "how do i turn you off"]:
+            with self.subTest(asked=asked):
+                self.assertIsNotNone(fastpath.answer(asked),
+                                     f"{asked!r} still costs a round trip")
+
+    def test_questions_about_other_things_are_left_alone(self):
+        for asked in ["who created python", "who made the iphone",
+                      "what can you do with a raspberry pi",
+                      "how do i stop the rain", "what model is this car",
+                      "who built the taj mahal", "where do you put the bins"]:
+            with self.subTest(asked=asked):
+                self.assertIsNone(fastpath.answer(asked),
+                                  f"{asked!r} was answered as if it were about reo")
+
+    def test_asking_about_itself_is_tried_before_anything_else(self):
+        """"What can you do" must not be read as a command to do something."""
+        self.assertIn("ABOUT", open(
+            Path(__file__).resolve().parent.parent / "reo" / "fastpath.py",
+            encoding="utf-8").read().split("COMPILED = ")[1][:80])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,7 @@ import datetime
 import operator
 import re
 
+from . import about
 from . import undo as undoing
 from .text import normalize
 
@@ -241,6 +242,13 @@ DOES = [
 ]
 
 
+# What reo knows about itself. First, because guessing about yourself goes
+# wrong in a particular way - it told him it was made by OpenAI three times
+# running, and told him to say "stop" to end the program, which does not work.
+ABOUT = [(pattern, lambda m, answer=answer: answer())
+         for pattern, answer in about.ABOUT]
+
+
 # Ordered; the first whole-utterance match wins.
 ROUTES = [
     (r"(what(s| is)? (the )?)?time( is it)?( now| right now| please)?", _time),
@@ -261,7 +269,7 @@ ROUTES = [
 # Questions first, then the things that act: a question about the volume
 # should not change it.
 COMPILED = [(re.compile(pattern + r"$"), answer)
-            for pattern, answer in ROUTES + DOES]
+            for pattern, answer in ABOUT + ROUTES + DOES]
 
 
 def answer(text: str):

@@ -334,8 +334,12 @@ EVERY_TOOL = [
     },
     {
         "name": "type_text",
-        "description": ("Type into another program, bringing that window to the front first. "
-                        "Name the window loosely: 'claude', 'notepad'."),
+        "description": ("Type into another program, bringing that window to the front "
+                        "first. ALWAYS pass window when the user names a program - "
+                        "'type hi in Claude' means window='claude'. Without it the "
+                        "text goes to whatever happens to be in front, which is "
+                        "usually not what they meant and they cannot see where it "
+                        "went. Name the window loosely: 'claude', 'notepad'."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -352,8 +356,10 @@ EVERY_TOOL = [
     },
     {
         "name": "press_key",
-        "description": ("Press a key in another window: enter, tab, escape, arrows, ctrl+a. "
-                        "Use it to send something already typed."),
+        "description": ("Press a key in another window: enter, tab, escape, arrows, "
+                        "ctrl+a. Use it to send something already typed. Pass window "
+                        "whenever the user named a program, for the same reason as "
+                        "type_text."),
         "input_schema": {
             "type": "object",
             "properties": {
