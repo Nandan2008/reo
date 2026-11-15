@@ -111,6 +111,130 @@ def _arithmetic(match):
         return None
 
 
+
+# --- the things that do something -------------------------------------------
+#
+# "Volume up" was costing a round trip to the model, a tool call, and a second
+# round trip - about two and a half seconds to press a key this machine can
+# press itself, and the tokens of a 1200 token prompt against an 8000 token
+# minute. The same for "open chrome" and "lock the laptop", which are among
+# the things said most often.
+#
+# Deliberately limited. Everything here is reversible: volume, media, windows,
+# the lock screen, a program, a website. Nothing deletes, spends, types or
+# moves the mouse - if it is not on this list the model decides, as before.
+# Anything that does not come off cleanly returns None, so the model still
+# gets its turn rather than reo reading out a failure.
+#
+# Remember normalize() has already been through the words: there is no
+# punctuation left, so "youtube.com" arrives as "youtube com".
+
+# Words that mean the thing after "open" is not a program. Without these,
+# "open the first result" tried to launch a program called "the first result".
+NOT_AN_APP = {"the", "a", "an", "my", "this", "that", "it", "them", "up", "all",
+              "first", "second", "third", "last", "next", "new", "another",
+              "one", "two", "again", "and", "some", "any", "me"}
+
+# Endings worth treating as a web address. Not "in", "co", "me", "ai" or "app":
+# they are ordinary words, and "open task manager in" is not a website.
+TLD = "com|org|net|io|tv|gov|edu"
+
+
+def _control(action: str, amount: int = 0):
+    from . import system
+    return system.control(action, amount)
+
+
+def _by(match) -> int:
+    """How many notches he asked for, if he said."""
+    asked = match.groupdict().get("by")
+    return int(asked) if asked else 0
+
+
+def _louder(match):
+    return _control("volume_up", _by(match))
+
+
+def _quieter(match):
+    return _control("volume_down", _by(match))
+
+
+def _either_way(match):
+    return (_louder if match["way"] == "up" else _quieter)(match)
+
+
+def _window(match):
+    return _control(match["what"].replace("z", "s"))
+
+
+def _open_app(match):
+    """Open a program, or hand it back to the model if the name was no good."""
+    name = match["app"].strip()
+    if not name or name.split()[0] in NOT_AN_APP:
+        return None
+    from .apps import open_app
+    said = open_app(name)
+    if said.startswith("Opened ") or " was already open" in said:
+        return said
+    # Not installed, several matches, or a timeout. The model can look at the
+    # list and work out what he meant; reading the failure out loud is the
+    # worst of both.
+    return None
+
+
+def _open_site(match):
+    from .tools import open_website
+    host = match["site"].replace(" ", "")
+    return open_website(f"{host}.{match['tld']}")
+
+
+def _youtube(match):
+    found = match.groupdict()
+    what = (found.get("what") or found.get("what2") or "").strip()
+    if not what or what in NOT_AN_APP:
+        return None
+    from .tools import play_youtube
+    said = play_youtube(what)
+    return said if said.startswith(("Playing", "Opened")) else None
+
+
+# Ordered, and every one matches the whole utterance or not at all.
+DOES = [
+    # the laptop's own controls
+    (r"(turn|put|make) (it|this|that|the volume|the sound) (?P<way>up|down)"
+     r"( a bit| a little| slightly)?( by (?P<by>\d+)( notches| steps| percent)?)?",
+     _either_way),
+    (r"(turn )?(the )?(volume|sound) (?P<way>up|down)"
+     r"( a bit| a little)?( by (?P<by>\d+)( notches| steps| percent)?)?",
+     _either_way),
+    (r"(turn |make )?(it |that |the volume )?louder( by (?P<by>\d+))?", _louder),
+    (r"(turn |make )?(it |that |the volume )?(quieter|softer)( by (?P<by>\d+))?",
+     _quieter),
+    (r"(un)?mute( it| the (volume|sound|audio))?", lambda m: _control("mute")),
+    (r"(play|pause|resume)( it| that| the (song|music|video|track))?|play pause",
+     lambda m: _control("play_pause")),
+    (r"(skip|next)( it| this)?( (track|song|video|one))?|skip (forward|ahead)",
+     lambda m: _control("next_track")),
+    (r"(previous|last|go back a) (track|song|video|one)",
+     lambda m: _control("previous_track")),
+    (r"(?P<what>minimi[sz]e|maximi[sz]e|restore)( (it|this|that|the))?( window)?",
+     _window),
+    (r"show (me )?(the )?desktop|minimi[sz]e everything|hide everything",
+     lambda m: _control("show_desktop")),
+    (r"close (it|this|that|the)( window)?|close (the |this )?window",
+     lambda m: _control("close_window")),
+    (r"lock (it|up|the (laptop|screen|computer|pc|machine)"
+     r"|my (laptop|screen|computer|pc))", lambda m: _control("lock")),
+    # opening things
+    (r"(open|go to|visit|bring up) (?P<site>[a-z0-9][a-z0-9 -]*) (?P<tld>" + TLD + r")",
+     _open_site),
+    (r"(open|launch|start|run|bring up) (?P<app>[a-z0-9][a-z0-9 ]*)", _open_app),
+    (r"(play|put on) (?P<what>.+) on youtube"
+     r"|(search|look up|find) (?P<what2>.+) on youtube and play"
+     r"( the (first|1st)( video| one)?)?", _youtube),
+]
+
+
 # Ordered; the first whole-utterance match wins.
 ROUTES = [
     (r"(what(s| is)? (the )?)?time( is it)?( now| right now| please)?", _time),
@@ -128,7 +252,10 @@ ROUTES = [
      r"divided by|over|x|\+|-|\*|/)\s+[\d.]+)+)", _arithmetic),
 ]
 
-COMPILED = [(re.compile(pattern + r"$"), answer) for pattern, answer in ROUTES]
+# Questions first, then the things that act: a question about the volume
+# should not change it.
+COMPILED = [(re.compile(pattern + r"$"), answer)
+            for pattern, answer in ROUTES + DOES]
 
 
 def answer(text: str):

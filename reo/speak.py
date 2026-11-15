@@ -1,6 +1,7 @@
 """Speech output. Offline pyttsx3 by default, Groq's Orpheus when asked for."""
 import io
 import re
+import threading
 import time
 import wave
 
@@ -88,7 +89,14 @@ def _pick_voice(engine) -> None:
             return
 
 
-def _speak_pyttsx3(text: str, emotion: str) -> None:
+def _speak_pyttsx3(text: str, emotion: str, until=None) -> bool:
+    """Say it. True if it was cut off part way through.
+
+    runAndWait blocks until the whole sentence is out, so the watching has to
+    happen beside it on another thread. stop() from there really does cut SAPI
+    off mid-word: measured 11.28s to say the whole of a long sentence against
+    1.17s when stopped after one second.
+    """
     rate, volume = VOICE_SETTINGS[emotion]
     # A fresh engine per call avoids a known pyttsx3 hang on Windows
     engine = pyttsx3.init()
@@ -96,11 +104,32 @@ def _speak_pyttsx3(text: str, emotion: str) -> None:
     engine.setProperty("rate", rate)
     engine.setProperty("volume", volume)
     engine.say(text)
-    engine.runAndWait()
+
+    if until is None:
+        engine.runAndWait()
+        engine.stop()
+        return False
+
+    over, cut = threading.Event(), threading.Event()
+
+    def watch():
+        while not over.is_set():
+            if until():
+                cut.set()
+                engine.stop()
+                return
+            over.wait(0.05)
+
+    threading.Thread(target=watch, daemon=True, name="barge-in").start()
+    try:
+        engine.runAndWait()
+    finally:
+        over.set()
     engine.stop()
+    return cut.is_set()
 
 
-def _speak_orpheus(text: str) -> None:
+def _speak_orpheus(text: str, until=None) -> bool:
     from openai import OpenAI
 
     from . import providers
@@ -128,7 +157,7 @@ def _speak_orpheus(text: str) -> None:
         audio = audio.reshape(-1, channels)
     else:
         audio, rate = _tighten(audio, rate)
-    _play(audio, rate)
+    return _play(audio, rate, until)
 
 
 def _tighten(audio, rate):
@@ -154,7 +183,7 @@ def _tighten(audio, rate):
     return audio, int(rate * config.SPEECH_SPEED)
 
 
-def _play(audio, rate) -> None:
+def _play(audio, rate, until=None) -> bool:
     """Play it, but never wait forever.
 
     sd.wait() blocks with no timeout. When something else holds the sound device
@@ -167,15 +196,25 @@ def _play(audio, rate) -> None:
     # length, and cutting a reply off mid-word is worse than waiting.
     deadline = time.monotonic() + expected * 2 + PLAY_GRACE
     while time.monotonic() < deadline:
+        if until is not None and until():
+            sd.stop()
+            return True
         stream = sd.get_stream()
         if stream is None or not stream.active:
-            return
+            return False
         time.sleep(0.05)
     sd.stop()
     print(f"  [voice] playback did not finish in {expected + PLAY_GRACE:.0f}s; moving on.")
+    return False
 
 
-def speak(text: str, ui=None) -> None:
+def speak(text: str, ui=None, until=None) -> bool:
+    """Say it out loud. True if it was cut off part way through.
+
+    `until` is asked, every fiftieth of a second, whether to stop. Without it
+    reo talks over anyone who tries to interrupt, and a reply to a question it
+    misheard has to be sat through to the end.
+    """
     global _orpheus_failed
 
     emotion, text = split_emotion(text)
@@ -186,10 +225,9 @@ def speak(text: str, ui=None) -> None:
 
     if config.TTS_BACKEND == "orpheus" and not _orpheus_failed:
         try:
-            _speak_orpheus(text)
-            return
+            return _speak_orpheus(text, until)
         except Exception as e:
             _orpheus_failed = True
             print(f"  [voice] Orpheus unavailable ({e}); using the offline voice.")
 
-    _speak_pyttsx3(text, emotion)
+    return _speak_pyttsx3(text, emotion, until)

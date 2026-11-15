@@ -91,35 +91,69 @@ def _heard_detail(heard_in: float, listener) -> str:
     return f"heard {heard_in:.1f}s (you {max(heard_in - stt, 0.0):.1f}s + stt {stt:.1f}s)"
 
 
-def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None) -> bool:
+def _interrupt_watch(toggle):
+    """Something speak() can ask whether it has been told to shut up.
+
+    The key cannot be read as a flag here: in hotkey mode it stays on between
+    commands, so "is it listening" is true the whole time. What matters is the
+    key being pressed *again*, which the count gives us.
+    """
+    if toggle is None:
+        return None
+    pressed = toggle.presses
+    return lambda: toggle.presses != pressed
+
+
+def _said(reply, ui, toggle, cut_in) -> float:
+    """Say it, and hand the floor straight back if he cut in.
+
+    A reply to a misheard question used to have to be sat through to the end.
+    Now a press stops it mid-word and starts recording, because interrupting
+    means he wants to say something, not that he wants to be asked again.
+    """
+    started = time.time()
+    cut_off = speak(reply, ui, until=cut_in)
+    if cut_off:
+        print("  (cut off - go on)")
+        if ui:
+            ui.line("note", "(cut off - go on)")
+        if toggle is not None:
+            toggle.listen_now()
+    return time.time() - started
+
+
+def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
+           toggle=None) -> bool:
     """Answer one command. Returns False when it is time to stop."""
     print(f"You: {text}")
     if ui:
         ui.line("you", text)
+    # Taken now rather than when reo starts talking, so a press during the
+    # thinking counts too: he wants to interject, and the reply he no longer
+    # wants should not be read out first.
+    cut_in = _interrupt_watch(toggle)
 
     if normalize(text) in EXIT_PHRASES:
         speak("Goodbye.", ui)
         return False
 
-    # Things the machine already knows need no model: answering the time took
-    # two seconds of round trips before this.
+    # Things the machine already knows, and things it can simply do, need no
+    # model: answering the time took two seconds of round trips before this,
+    # and "turn it up" took one and nine tenths. The window is told first,
+    # because opening a program still takes a couple of seconds and it should
+    # not look like nothing is happening.
+    if ui:
+        ui.set_state("thinking")
     quick = fastpath.answer(text)
     if quick is not None:
-        if ui:
-            ui.set_state("thinking")
-        started = time.time()
-        speak(quick, ui)
+        spoke = _said(quick, ui, toggle, cut_in)
         # keep the exchange in history, or a follow-up loses the thread
         brain.history.append({"role": "user", "content": text})
         brain.history.append({"role": "assistant", "content": quick})
-        spoke = time.time() - started
         stats.add_reply(heard_in, 0.0, spoke, used_model=False)
         print(f"  [time] {_heard_detail(heard_in, listener)}  "
               f"answered directly (no model)  spoke {spoke:.1f}s")
         return True
-
-    if ui:
-        ui.set_state("thinking")
 
     started = time.time()
     try:
@@ -129,9 +163,7 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None) -> b
         reply = "Something went wrong reaching my brain. Please try again."
     thought = time.time() - started
 
-    started = time.time()
-    speak(reply or "Done.", ui)
-    spoke = time.time() - started
+    spoke = _said(reply or "Done.", ui, toggle, cut_in)
 
     # Where a reply's time actually went, so slowness can be read off the log
     # instead of guessed at.
@@ -268,7 +300,7 @@ def _loop(listener, brain, waker, toggle, combination, ui):
                 ui.line("note", note)
             continue
 
-        if not handle(brain, text, ui, heard_in, listener):
+        if not handle(brain, text, ui, heard_in, listener, toggle):
             break
 
 

@@ -20,6 +20,8 @@ from reo import system as reo_system
 from reo.memory import Memory
 from reo.audio import has_speech, looks_hallucinated
 from reo.audio import normalize as normalize_gain
+from reo import __main__ as main
+from reo import speak as speak_module
 from reo.__main__ import EXIT_PHRASES
 from reo.text import is_speech, normalize
 from reo.brain import KNOWN_TOOLS, SYSTEM, Brain
@@ -1789,6 +1791,221 @@ class ADeadDevice(unittest.TestCase):
             main._loop(listener, None, None, toggle, "ctrl+alt+r", ui)
         self.assertTrue(any("muted" in line for line in said),
                         f"he was not told the microphone was silent: {said}")
+
+
+class ActingWithoutTheModel(unittest.TestCase):
+    """"Volume up" was a round trip to the model, a tool call and a second
+    round trip, to press a key this machine can press itself."""
+
+    def _routed(self, said):
+        """Which handler takes this, without letting it actually run."""
+        asked = normalize(said)
+        for pattern, respond in fastpath.COMPILED:
+            if pattern.fullmatch(asked):
+                return getattr(respond, "__name__", "lambda")
+        return None
+
+    def _acted(self, said):
+        """What reo did, with the laptop's controls faked out."""
+        done = []
+        with mock.patch.object(reo_system, "control",
+                               lambda action, amount=0: done.append((action, amount))
+                               or f"did {action}"):
+            answered = fastpath.answer(said)
+        return done, answered
+
+    def test_the_volume_needs_no_model(self):
+        for said, expected in [("turn it up", ("volume_up", 0)),
+                               ("volume up", ("volume_up", 0)),
+                               ("turn the volume down", ("volume_down", 0)),
+                               ("turn it up by 3", ("volume_up", 3)),
+                               ("louder", ("volume_up", 0)),
+                               ("quieter", ("volume_down", 0)),
+                               ("make it softer", ("volume_down", 0)),
+                               ("mute", ("mute", 0)),
+                               ("unmute it", ("mute", 0))]:
+            with self.subTest(said=said):
+                done, answered = self._acted(said)
+                self.assertEqual(done, [expected])
+                self.assertIsNotNone(answered)
+
+    def test_media_keys_need_no_model(self):
+        for said, action in [("play", "play_pause"), ("pause it", "play_pause"),
+                             ("resume", "play_pause"), ("next track", "next_track"),
+                             ("skip", "next_track"), ("previous song", "previous_track"),
+                             ("last track", "previous_track")]:
+            with self.subTest(said=said):
+                done, _ = self._acted(said)
+                self.assertEqual(done, [(action, 0)])
+
+    def test_windows_and_the_lock_screen_need_no_model(self):
+        for said, action in [("minimise this window", "minimise"),
+                             ("minimize it", "minimise"),
+                             ("maximise", "maximise"),
+                             ("restore it", "restore"),
+                             ("show desktop", "show_desktop"),
+                             ("close this window", "close_window"),
+                             ("lock the laptop", "lock"),
+                             ("lock the screen", "lock"),
+                             ("lock it", "lock")]:
+            with self.subTest(said=said):
+                done, _ = self._acted(said)
+                self.assertEqual(done, [(action, 0)])
+
+    def test_opening_a_program_needs_no_model(self):
+        opened = []
+        import reo.apps as apps
+        with mock.patch.object(apps, "open_app",
+                               lambda name: opened.append(name) or f"Opened {name}."):
+            self.assertEqual(fastpath.answer("open chrome"), "Opened chrome.")
+            self.assertEqual(fastpath.answer("launch notepad"), "Opened notepad.")
+        self.assertEqual(opened, ["chrome", "notepad"])
+
+    def test_a_program_it_cannot_find_goes_to_the_model(self):
+        """Reading "Nothing installed matches" out loud is the worst of both:
+        the model can look at the list and work out what he meant."""
+        import reo.apps as apps
+        with mock.patch.object(apps, "open_app",
+                               lambda name: "Nothing installed matches 'spotifi'."):
+            self.assertIsNone(fastpath.answer("open spotifi"))
+
+    def test_a_website_is_opened_rather_than_launched(self):
+        """normalize() has already eaten the dot, so "youtube.com" arrives as
+        "youtube com" and has to be put back together."""
+        went = []
+        import reo.tools as tools_module
+        with mock.patch.object(tools_module, "open_website",
+                               lambda url: went.append(url) or f"Opened {url}."):
+            fastpath.answer("open youtube.com")
+            fastpath.answer("go to github.com")
+        self.assertEqual(went, ["https://youtube.com", "https://github.com"]
+                         if went and went[0].startswith("http")
+                         else ["youtube.com", "github.com"])
+
+    def test_the_things_that_must_still_reach_the_model(self):
+        """A keyword search would hijack all of these."""
+        for said in ["open the first result", "open it", "open my email",
+                     "launch the second one", "play the first video",
+                     "close the browser and open chrome", "how do i turn it up",
+                     "turn up the heating in my room", "lock",
+                     "up", "down", "go back", "what is the volume",
+                     "whats on youtube", "should i lock my laptop"]:
+            with self.subTest(said=said):
+                self.assertIsNone(fastpath.answer(said),
+                                  f"{said!r} was taken by the fast path")
+
+    def test_a_question_is_never_answered_by_doing_it(self):
+        """The questions are tried before the actions on purpose: asking about
+        the volume must not change it."""
+        done, _ = self._acted("whats my battery")
+        self.assertEqual(done, [])
+
+    def test_nothing_here_deletes_types_or_spends(self):
+        """The whole list, read back. Anything irreversible is the model's
+        decision, where it has a system prompt and a confirmation to lean on."""
+        import reo.system as system_module
+        allowed = set(system_module.VK) | set(system_module.SHOW) | {
+            "show_desktop", "close_window", "lock"}
+        seen = set()
+        for said in ["turn it up", "turn it down", "mute", "play", "skip",
+                     "previous song", "minimise", "maximise", "restore",
+                     "show desktop", "close it", "lock it"]:
+            done, _ = self._acted(said)
+            seen.update(action for action, _ in done)
+        self.assertTrue(seen)
+        self.assertTrue(seen <= allowed, f"not on the reversible list: {seen - allowed}")
+
+
+class CuttingReoOff(unittest.TestCase):
+    """A reply to a misheard question used to have to be sat through to the
+    end. Measured: 11.28s to say a long sentence, 1.17s when stopped."""
+
+    def test_the_key_being_pressed_again_is_what_counts(self):
+        """Not whether it is listening: in hotkey mode that stays on between
+        commands, so it is true the whole time reo is talking."""
+        from reo.hotkey import Toggle
+        toggle = Toggle.__new__(Toggle)
+        toggle._on = threading.Event()
+        toggle._woke = threading.Event()
+        toggle._presses = 0
+        toggle._on_change = None
+
+        toggle._flip()                      # he pressed to start
+        self.assertTrue(toggle.listening)
+        watch = main._interrupt_watch(toggle)
+        self.assertFalse(watch(), "cut itself off before he touched anything")
+        toggle._flip()                      # and again, mid-sentence
+        self.assertTrue(watch())
+
+    def test_cutting_in_hands_the_floor_straight_back(self):
+        """Interrupting means he wants to say something, not that he wants to
+        be asked again, so reo starts listening rather than waiting."""
+        from reo.hotkey import Toggle
+        toggle = Toggle.__new__(Toggle)
+        toggle._on = threading.Event()
+        toggle._woke = threading.Event()
+        toggle._presses = 0
+        toggle._on_change = None
+        self.assertFalse(toggle.listening)
+
+        with mock.patch.object(main, "speak", lambda *a, **kw: True):
+            main._said("a long wrong answer", None, toggle, lambda: True)
+        self.assertTrue(toggle.listening)
+
+    def test_finishing_normally_changes_nothing(self):
+        from reo.hotkey import Toggle
+        toggle = Toggle.__new__(Toggle)
+        toggle._on = threading.Event()
+        toggle._woke = threading.Event()
+        toggle._presses = 0
+        toggle._on_change = None
+
+        with mock.patch.object(main, "speak", lambda *a, **kw: False):
+            main._said("the right answer", None, toggle, lambda: False)
+        self.assertFalse(toggle.listening)
+
+    def test_no_hotkey_means_nothing_to_watch(self):
+        """Wake mode has no key to press, so there is nothing to interrupt."""
+        self.assertIsNone(main._interrupt_watch(None))
+
+    def test_the_offline_voice_is_asked_whether_to_stop(self):
+        """Without passing it down, the watch is never consulted at all."""
+        asked = []
+        with mock.patch.object(config, "TTS_BACKEND", "pyttsx3"),              mock.patch.object(speak_module, "_speak_pyttsx3",
+                               lambda text, emotion, until=None: bool(
+                                   asked.append(until)) or False):
+            speak_module.speak("[neutral] Done.", None, until=lambda: False)
+        self.assertEqual(len(asked), 1)
+        self.assertIsNotNone(asked[0], "the voice was given no way to be stopped")
+
+    def test_the_groq_voice_is_asked_too(self):
+        """Which is the one that matters here: his .env asks for Orpheus."""
+        asked = []
+        with mock.patch.object(config, "TTS_BACKEND", "orpheus"),              mock.patch.object(speak_module, "_orpheus_failed", False),              mock.patch.object(speak_module, "_speak_orpheus",
+                               lambda text, until=None: bool(
+                                   asked.append(until)) or False):
+            speak_module.speak("[neutral] Done.", None, until=lambda: False)
+        self.assertEqual(len(asked), 1)
+        self.assertIsNotNone(asked[0], "the voice was given no way to be stopped")
+
+    def test_playback_stops_when_told_to(self):
+        """The Groq voice plays a clip through sounddevice, and that loop is
+        where a press has to be noticed."""
+        import sounddevice as sd
+        stopped = []
+        stream = SimpleNamespace(active=True)
+        with mock.patch.object(sd, "play", lambda *a, **kw: None),              mock.patch.object(sd, "get_stream", lambda: stream),              mock.patch.object(sd, "stop", lambda: stopped.append(1)):
+            cut = speak_module._play(np.zeros(16000, dtype=np.int16), 16000,
+                                     until=lambda: True)
+        self.assertTrue(cut)
+        self.assertEqual(stopped, [1])
+
+    def test_playback_left_alone_runs_to_the_end(self):
+        import sounddevice as sd
+        stream = SimpleNamespace(active=False)
+        with mock.patch.object(sd, "play", lambda *a, **kw: None),              mock.patch.object(sd, "get_stream", lambda: stream):
+            self.assertFalse(speak_module._play(
+                np.zeros(16000, dtype=np.int16), 16000, until=lambda: False))
 
 
 if __name__ == "__main__":
