@@ -5,14 +5,11 @@
 <title>REO</title>
 <style>
   :root {
-    --bg: #04070b;
-    --accent: #2b8fa8;
-    --accent-soft: #2b8fa840;
-    --text: #c6dcee;
-    --muted: #51687d;
-    --edge: #16293a;
-    /* One number drives the whole projection: the state sets it. */
-    --beat: 1;
+    --bg: #02060a;
+    --accent: #4fd4ff;
+    --text: #bfe4f4;
+    --muted: #4a6578;
+    --edge: #112632;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -23,87 +20,98 @@
     font: 13px/1.5 Consolas, "Cascadia Mono", monospace;
     height: 100vh;
     overflow: hidden;
-    background-image: radial-gradient(ellipse at 30% 58%, #091722 0%, var(--bg) 62%);
+    /* Two pools of light rather than one flat wash: it gives the screen a
+       direction, so the reactor sits in a room instead of on a sheet. */
+    background-image:
+      radial-gradient(ellipse 70% 55% at 50% 48%, #071a26 0%, transparent 70%),
+      radial-gradient(ellipse 90% 70% at 50% 120%, #04101a 0%, transparent 60%);
   }
 
-  .frame { position: fixed; inset: 18px; pointer-events: none; }
-  .frame span { position: absolute; width: 54px; height: 54px; border: 1px solid var(--edge); }
+  /* ---- chrome ---- */
+  .frame { position: fixed; inset: 20px; pointer-events: none; }
+  .frame span { position: absolute; width: 58px; height: 58px; border: 1px solid var(--edge); }
   .frame span:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; }
   .frame span:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; }
   .frame span:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; }
   .frame span:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; }
 
   header {
-    position: fixed; top: 34px; left: 46px; right: 46px;
+    position: fixed; top: 38px; left: 50px; right: 50px;
     display: flex; justify-content: space-between; align-items: flex-start;
-    border-bottom: 1px solid var(--edge); padding-bottom: 14px;
+    border-bottom: 1px solid var(--edge); padding-bottom: 15px;
   }
-  h1 { font-size: 23px; letter-spacing: .42em; font-weight: 700; }
+  h1 { font-size: 23px; letter-spacing: .44em; font-weight: 700; }
   h1 em { color: var(--accent); font-style: normal; }
-  .sub { color: var(--muted); font-size: 10px; letter-spacing: .22em; margin-top: 5px; }
-  .clock { font-size: 19px; text-align: right; }
+  .sub { color: var(--muted); font-size: 10px; letter-spacing: .22em; margin-top: 6px; }
+  .clock { font-size: 19px; text-align: right; font-variant-numeric: tabular-nums; }
   .date { color: var(--muted); font-size: 10px; letter-spacing: .18em; text-align: right; }
 
-  main {
-    position: fixed; inset: 110px 46px 56px 46px;
-    display: grid; grid-template-columns: minmax(360px, 34%) 1fr 212px; gap: 34px;
+  /* ---- the reactor ----------------------------------------------------
+     Dead centre of the screen, with the panels as rails down either side.
+     The old layout put it in the left third of a three column grid, which
+     made the thing the whole window is for look like one pane of three.
+
+     It is a canvas because the shape is layered: rings tilted in three
+     dimensions, a graduated scale, segmented arcs, the coils, the core, and
+     light falling into it. CSS can do any one of those; it cannot do them
+     all turning at different rates without a dozen animated blurs, and an
+     animated blur is re-rasterised every single frame.
+
+     What keeps it cheap: no shadowBlur anywhere, additive compositing for
+     the glow, a capped pixel ratio, a 30fps ceiling, the haze behind it
+     painted once in CSS rather than redrawn, and the loop stopping dead
+     when the window is hidden. */
+  .reactor {
+    position: fixed; left: 50%; top: 50%;
+    width: min(66vh, 52vw); height: min(66vh, 52vw);
+    transform: translate(-50%, -52%);
   }
 
-  /* ---- the projection -------------------------------------------------
-     Not a wireframe. The reference is a ball of thousands of light streaks -
-     city lights wrapped on a sphere - and no arrangement of tidy rings gets
-     near it. So it is a canvas: a few thousand filaments generated once as
-     points on a sphere, turned by a rotation matrix each frame and drawn as
-     short additive strokes.
-
-     What keeps it cheap: no shadowBlur (the expensive one), additive
-     compositing for the glow instead, a capped pixel ratio, a 30fps ceiling,
-     and the bloom behind it painted once in CSS rather than redrawn. The
-     loop stops entirely when the window is hidden. */
-  .stage { display: flex; flex-direction: column; align-items: center; justify-content: center; }
-
-  .holo { position: relative; width: 440px; height: 440px; }
-
-  /* Painted once and never animated. A moving blur is re-rasterised every
-     frame; this one just sits there. */
-  .holo::before {
-    content: ""; position: absolute; inset: -12%;
+  /* Painted once and never animated. */
+  .reactor::before {
+    content: ""; position: absolute; inset: -22%;
     background: radial-gradient(circle at 50% 50%,
-      color-mix(in srgb, var(--accent) 24%, transparent) 0%,
-      color-mix(in srgb, var(--accent) 7%, transparent) 38%, transparent 68%);
+      color-mix(in srgb, var(--accent) 17%, transparent) 0%,
+      color-mix(in srgb, var(--accent) 6%, transparent) 34%,
+      transparent 66%);
     pointer-events: none;
   }
-  #globe { position: relative; display: block; width: 100%; height: 100%; }
+  #reactor { position: relative; display: block; width: 100%; height: 100%; }
 
   .state {
-    margin-top: 10px; letter-spacing: .3em; font-weight: 700; font-size: 14px;
-    color: var(--accent);
+    position: fixed; left: 50%; top: calc(50% + min(34vh, 27vw));
+    transform: translateX(-50%);
+    letter-spacing: .42em; font-weight: 700; font-size: 13px;
+    color: var(--accent); text-indent: .42em;
   }
 
-  /* ---- transcript ---- */
+  /* ---- the rails ---- */
+  .rail { position: fixed; top: 16vh; bottom: 12vh; display: flex; flex-direction: column; }
+  .rail.left { left: 50px; width: min(26vw, 430px); }
+  .rail.right { right: 50px; width: min(17vw, 250px); text-align: right; }
+
   .label { color: var(--muted); font-size: 10px; letter-spacing: .24em; }
-  .panel-head { border-bottom: 1px solid var(--edge); padding-bottom: 7px; margin-bottom: 14px; }
-  #log { overflow: hidden; display: flex; flex-direction: column; gap: 9px; }
-  .line { display: grid; grid-template-columns: 42px 1fr; gap: 6px; animation: rise .22s ease-out; }
+  .panel-head { border-bottom: 1px solid var(--edge); padding-bottom: 8px; margin-bottom: 15px; }
+  #log { overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+  .line { display: grid; grid-template-columns: 40px 1fr; gap: 8px; animation: rise .22s ease-out; }
   .line .who { color: var(--muted); font-size: 10px; padding-top: 2px; }
   .line.reo .what { color: var(--accent); }
   .line.note .what { color: var(--muted); font-style: italic; }
   @keyframes rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; } }
 
-  /* ---- system panel ---- */
   .stat { display: flex; justify-content: space-between; font-size: 11px; padding: 4px 0; }
   .stat b { color: var(--accent); font-weight: 600; }
-  .bar { height: 2px; background: #10202d; margin: 3px 0 9px; }
+  .bar { height: 2px; background: #0e1f2a; margin: 3px 0 9px; }
   .bar i { display: block; height: 100%; background: var(--accent); transition: width .5s; }
-  .group { margin-bottom: 20px; }
+  .group { margin-bottom: 22px; }
 
   footer {
-    position: fixed; left: 46px; bottom: 26px;
+    position: fixed; left: 50px; bottom: 28px;
     color: var(--muted); font-size: 9px; letter-spacing: .2em;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .holo, .cage, .core, .line, .scan::before { animation: none; }
+    .line { animation: none; }
   }
 </style>
 </head>
@@ -121,45 +129,46 @@
     </div>
   </header>
 
-  <main>
-    <div class="stage">
-      <div class="holo"><canvas id="globe" aria-hidden="true"></canvas></div>
-      <div class="state" id="state">IDLE</div>
-    </div>
+  <div class="reactor"><canvas id="reactor" aria-hidden="true"></canvas></div>
+  <div class="state" id="state">IDLE</div>
 
-    <div>
-      <div class="panel-head label">TRANSCRIPT</div>
-      <div id="log"></div>
-    </div>
+  <div class="rail left">
+    <div class="panel-head label">TRANSCRIPT</div>
+    <div id="log"></div>
+  </div>
 
-    <div>
-      <div class="panel-head label">SYSTEM</div>
-      <div class="group" id="session"></div>
-      <div class="panel-head label">DEVICE</div>
-      <div class="group" id="device"></div>
-    </div>
-  </main>
+  <div class="rail right">
+    <div class="panel-head label">SYSTEM</div>
+    <div class="group" id="session"></div>
+    <div class="panel-head label">DEVICE</div>
+    <div class="group" id="device"></div>
+  </div>
 
   <footer>ESC WINDOWED &nbsp;&nbsp;&nbsp; CTRL+Q CLOSE &nbsp;&nbsp;&nbsp; SAY GOODBYE TO QUIT</footer>
 
 <script>
-// Gold, like the reference. The state shifts the hue a little and the spin a
-// lot, so you can read what reo is doing without it stopping looking like one
-// object. [css accent, hue, spin, heat]
+// Ice blue at rest, because that is the colour of the thing this is meant to
+// be. Thinking goes amber: it is the one state worth spotting from across the
+// room, and warm against the cyan is the clearest signal there is without
+// changing the shape. [css accent, hue, spin, heat]
 const STATES = {
-  idle:      ["#c8821f", 34, 1.0, 0.72],
-  listening: ["#ffc24a", 42, 2.6, 1.00],
-  thinking:  ["#ff7a18", 22, 1.9, 0.90],
-  speaking:  ["#ffd98a", 46, 1.5, 0.95],
+  idle:      ["#3fb6dc", 193, 1.00, 0.66],
+  listening: ["#5fe3ff", 189, 2.10, 1.00],
+  thinking:  ["#ffb347",  34, 1.70, 0.92],
+  speaking:  ["#8ef0ff", 186, 1.30, 0.98],
 };
-let hue = 34, spin = 1.0, heat = 0.72;
+let hue = 193, spin = 1.0, heat = 0.66;
+// Spin and heat are eased, so a state change is a surge rather than a jump
+// cut. The colour is not: easing a hue from cyan to amber walks it straight
+// through green, and reo spent the whole transition looking like a different
+// machine. A state is also the one thing worth reading instantly.
+let shownSpin = spin, shownHeat = heat;
 
 window.reo = {
   state(name) {
     const [colour, h, s, hot] = STATES[name] || STATES.idle;
     const root = document.documentElement.style;
     root.setProperty("--accent", colour);
-    root.setProperty("--accent-soft", colour + "40");
     hue = h; spin = s; heat = hot;
     document.getElementById("state").textContent = name.toUpperCase();
   },
@@ -178,7 +187,7 @@ window.reo = {
 
   // Rebuilding both panels from innerHTML eight times a second was pure
   // waste: the values change about once a second and the DOM churn was
-  // competing with the projection for the same main thread.
+  // competing with the reactor for the same main thread.
   stats(session, device) {
     draw("session", session);
     draw("device", device);
@@ -239,86 +248,66 @@ async function poll() {
 setInterval(poll, 120);
 
 
-// ---- the globe ------------------------------------------------------------
-// The reference is not a scatter of sparks. Its light runs in long curved
-// strands that wrap the sphere and bunch into bright knots. So every filament
-// here is an arc of a great circle - pick an axis, walk round it - and the
-// axes are clustered, which is what makes the strands run in bands instead of
-// pointing everywhere at once.
-//
-// Cost is kept down by shape, not by cutting detail: an arc of twelve points
-// is one stroke call, where twelve separate dashes would be twelve.
+// ---- the reactor ----------------------------------------------------------
+// Six layers, and the whole effect is in them disagreeing: the body is still,
+// the instrument rings turn at four different rates, two of them backwards,
+// and the orbits are tilted out of the plane so the thing has a near side.
+// A single ring turning on its own is a loading spinner.
 (() => {
-  const canvas = document.getElementById("globe");
+  const canvas = document.getElementById("reactor");
   if (!canvas) return;
   const ctx = canvas.getContext("2d", { alpha: true });
 
-  // Same arrangement every run, so reo does not look different each launch.
-  let seed = 20261109;
+  // Same arrangement every launch, so reo does not look like a different
+  // machine each time it starts.
+  let seed = 20261115;
   const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
   const span = (a, b) => a + rnd() * (b - a);
 
-  function unit() {                       // an even direction on the sphere
-    const z = rnd() * 2 - 1, a = rnd() * Math.PI * 2;
-    const r = Math.sqrt(Math.max(0, 1 - z * z));
-    return [Math.cos(a) * r, Math.sin(a) * r, z];
-  }
-  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1],
-                           a[2] * b[0] - a[0] * b[2],
-                           a[0] * b[1] - a[1] * b[0]];
-  function norm(v) {
-    const l = Math.hypot(v[0], v[1], v[2]) || 1;
-    return [v[0] / l, v[1] / l, v[2] / l];
-  }
-  function nudge(v, amount) {             // a direction near another one
-    return norm([v[0] + (rnd() - 0.5) * amount,
-                 v[1] + (rnd() - 0.5) * amount,
-                 v[2] + (rnd() - 0.5) * amount]);
-  }
+  const FOCAL = 3.6;                   // how much perspective the orbits get
 
-  // A handful of axes the strands prefer to run around, so the sphere has
-  // grain. Everything sharing one axis sweeps the same way.
-  const AXES = Array.from({ length: 9 }, unit);
-  // And a few places the detail crowds into, the way city light clumps.
-  const KNOTS = Array.from({ length: 7 }, unit);
-
-  const strands = [];
-  for (let i = 0; i < 2700; i++) {
-    const axis = nudge(AXES[i % AXES.length], 0.5);
-    let u = norm(cross(axis, Math.abs(axis[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1]));
-    const v = norm(cross(axis, u));
-
-    // Where on that circle it starts: usually near a knot, sometimes anywhere.
-    let from = rnd() * Math.PI * 2;
-    if (rnd() < 0.62) {
-      const k = KNOTS[(i * 7) % KNOTS.length];
-      from = Math.atan2(k[0] * v[0] + k[1] * v[1] + k[2] * v[2],
-                        k[0] * u[0] + k[1] * u[1] + k[2] * u[2])
-             + (rnd() - 0.5) * 1.1;
-    }
-    // Short fragments, overwhelmingly. Long loops read as wound string;
-    // the reference is fine detail packed into bands, with only the odd
-    // sweep running right across it.
-    const long = rnd() < 0.022;
-    const arc = long ? span(1.1, 2.1) : span(0.035, 0.26);
-    strands.push({
-      u, v, from, arc, long,
-      steps: Math.max(2, Math.round(arc * 14)),
-      shell: span(0.88, 1.07),
-      bright: long ? span(0.7, 1) : span(0.25, 1),
-      width: long ? span(0.9, 1.5) : span(0.35, 0.9),
-    });
+  // Three orbits, each in its own tilted plane. Held as two orthonormal
+  // vectors rather than angles: the point on the ring is then just
+  // u*cos + v*sin, and the depth of it falls out of the z component.
+  function plane(tilt, lean) {
+    const ct = Math.cos(tilt), st = Math.sin(tilt);
+    const cl = Math.cos(lean), sl = Math.sin(lean);
+    return {
+      u: [cl, sl * st, -sl * ct],
+      v: [-sl, cl * st, -cl * ct],
+    };
   }
+  const ORBITS = [
+    { ...plane(1.14, 0.20), r: 1.00, rate: -0.11, width: 1.3, bright: 0.38 },
+    { ...plane(0.46, -0.42), r: 0.88, rate: 0.17, width: 1.1, bright: 0.30 },
+    { ...plane(1.42, 0.68), r: 0.74, rate: -0.26, width: 0.9, bright: 0.22 },
+  ];
+  const ORBIT_ARCS = 14;               // chunks per ring, so depth can vary
 
-  // Pinpricks between the strands: the fine grain the reference is full of.
-  const motes = Array.from({ length: 2600 }, () => ({
-    p: unit(), shell: span(0.9, 1.06), bright: span(0.2, 1),
+  // The graduated scale. Every fifth mark is longer, every twentieth longer
+  // still - the detail that reads as an instrument rather than a decoration.
+  const TICKS = 200;
+
+  // The coils: the part that makes it a reactor and not a dial. They sit on
+  // the body, which does not turn.
+  const COILS = 18;
+
+  // Light falling in. Respawned at the rim, so it never runs out.
+  const MOTES = Array.from({ length: 300 }, () => ({
+    a: rnd() * Math.PI * 2,
+    r: span(0.34, 1.12),
+    speed: span(0.22, 0.62) * (rnd() < 0.5 ? -1 : 1),
+    fall: span(0.035, 0.12),
+    size: span(0.9, 2.1),
+    bright: span(0.25, 1),
   }));
 
   let width = 0, height = 0;
   function fit() {
     const box = canvas.getBoundingClientRect();
-    // Capping the ratio matters: at 2x this is four times the fill.
+    if (box.width < 2 || box.height < 2) return;   // laid out but not yet sized
+    // Capping the ratio matters: at 2x this is four times the fill, and his
+    // screen is 2560 across.
     const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
     width = Math.max(1, Math.round(box.width));
     height = Math.max(1, Math.round(box.height));
@@ -328,83 +317,240 @@ setInterval(poll, 120);
   }
   fit();
   addEventListener("resize", fit);
+  // The size comes from min(66vh, 52vw), and at the moment this script runs
+  // the box can still measure nothing - which left the canvas one pixel
+  // square and the reactor invisible. The observer fires as soon as the
+  // layout knows, and again whenever the window changes.
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(canvas);
 
-  let turn = 0, last = performance.now(), running = true, due = 0;
+  let turn = 0, breath = 0, last = performance.now(), running = true, due = 0;
   const FRAME = 1000 / 30;            // 30fps is plenty and halves the work
 
   function frame(now) {
     if (!running) return;
     const dt = Math.min(now - last, 100);
     last = now;
-    turn += (dt / 1000) * 0.17 * spin;
+    const seconds = dt / 1000;
+    // Chase the state rather than snapping to it.
+    const k = Math.min(1, seconds * 3.2);
+    shownSpin += (spin - shownSpin) * k;
+    shownHeat += (heat - shownHeat) * k;
+    turn += seconds * 0.22 * shownSpin;
+    breath += seconds;
+    for (const m of MOTES) {
+      m.a += seconds * m.speed * shownSpin * 0.5;
+      m.r -= seconds * m.fall * shownSpin * 0.45;
+      if (m.r < 0.30) { m.r = span(1.02, 1.16); m.a = rnd() * Math.PI * 2; }
+    }
     due -= dt;
     if (due <= 0) { due = FRAME; paint(); }
     requestAnimationFrame(frame);
   }
 
+  const ink = (h, l, a) => "hsla(" + h.toFixed(1) + ", 95%, " + l.toFixed(1) +
+                           "%, " + Math.max(0, a).toFixed(3) + ")";
+
   function paint() {
+    if (width < 2 || height < 2) return;
     const cx = width / 2, cy = height / 2;
-    const R = Math.min(width, height) * 0.42;
-    const focal = 3.4;
-    const cos = Math.cos(turn), sin = Math.sin(turn);
+    const R = Math.min(width, height) * 0.46;
+    const H = hue, heat = shownHeat;
+    // One slow breath under everything, so the core is never quite static.
+    const pulse = 0.88 + 0.12 * Math.sin(breath * 1.5);
 
     ctx.clearRect(0, 0, width, height);
     ctx.globalCompositeOperation = "lighter";
     ctx.lineCap = "round";
 
-    for (const s of strands) {
-      // Depth at the middle of the arc decides the whole strand's brightness.
-      // Per-point alpha would mean one stroke per segment, which is the cost
-      // this shape exists to avoid.
-      const mid = s.from + s.arc / 2;
-      const mz = (s.u[2] * Math.cos(mid) + s.v[2] * Math.sin(mid));
-      const zz = mz * cos - (s.u[0] * Math.cos(mid) + s.v[0] * Math.sin(mid)) * sin;
-      const depth = (zz + 1) / 2;
-      const alpha = s.bright * (0.05 + depth * depth * 0.95) * heat * 0.9;
-      if (alpha < 0.01) continue;
-
-      ctx.beginPath();
-      for (let i = 0; i <= s.steps; i++) {
-        const a = s.from + (s.arc * i) / s.steps;
-        const ca = Math.cos(a), sa = Math.sin(a);
-        const px = s.u[0] * ca + s.v[0] * sa;
-        const py = s.u[1] * ca + s.v[1] * sa;
-        const pz = s.u[2] * ca + s.v[2] * sa;
-        const rx = px * cos + pz * sin, rz = pz * cos - px * sin;
-        const k = (focal / (focal - rz * s.shell)) * s.shell * R;
-        const X = cx + rx * k, Y = cy - py * k;
-        if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    // --- 1. the tilted orbits, behind the body ---------------------------
+    for (const o of ORBITS) {
+      const phase = turn * o.rate * 6;
+      for (let c = 0; c < ORBIT_ARCS; c++) {
+        const from = phase + (c / ORBIT_ARCS) * Math.PI * 2;
+        const to = phase + ((c + 0.86) / ORBIT_ARCS) * Math.PI * 2;
+        const mid = (from + to) / 2;
+        // Depth of the middle of this chunk decides the whole chunk. Per
+        // point alpha would mean one stroke per segment, which is the cost
+        // this shape exists to avoid.
+        const depth = (o.u[2] * Math.cos(mid) + o.v[2] * Math.sin(mid) + 1) / 2;
+        const alpha = o.bright * (0.06 + depth * depth * 0.94) * heat;
+        if (alpha < 0.012) continue;
+        ctx.beginPath();
+        for (let i = 0; i <= 8; i++) {
+          const a = from + (to - from) * (i / 8);
+          const ca = Math.cos(a), sa = Math.sin(a);
+          const z = o.u[2] * ca + o.v[2] * sa;
+          const k = (FOCAL / (FOCAL - z)) * o.r * R;
+          ctx.lineTo(cx + (o.u[0] * ca + o.v[0] * sa) * k,
+                     cy - (o.u[1] * ca + o.v[1] * sa) * k);
+        }
+        ctx.strokeStyle = ink(H + depth * 8, 46 + depth * 36, alpha);
+        ctx.lineWidth = o.width * (0.7 + depth * 0.6);
+        ctx.stroke();
       }
-      // Warm in front, cooler as the sphere turns away: that is the roundness.
-      const edge = 1 - Math.abs(zz);
-      ctx.strokeStyle = "hsla(" + (hue + depth * 16 - edge * 24) + ", 96%, " +
-                        (44 + depth * 38) + "%, " + alpha.toFixed(3) + ")";
-      ctx.lineWidth = s.width;
+    }
+
+    // The rim: one thin circle right at the edge, which closes the whole
+    // composition. Without it the outermost thing is a tilted orbit and the
+    // reactor has no outside.
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * 1.0, 0, Math.PI * 2);
+    ctx.strokeStyle = ink(H, 58, 0.17 * heat);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // --- 2. the graduated scale ------------------------------------------
+    // Two paths for two hundred marks: the short ones and the long ones.
+    const scale = -turn * 0.42;
+    for (const [every, len, lightness, alpha, wide] of
+         [[1, 0.030, 52, 0.30, 1.0], [5, 0.055, 68, 0.52, 1.1], [20, 0.085, 92, 0.85, 1.4]]) {
+      ctx.beginPath();
+      for (let i = 0; i < TICKS; i++) {
+        if (i % every !== 0) continue;
+        if (every === 1 && i % 5 === 0) continue;
+        if (every === 5 && i % 20 === 0) continue;
+        const a = scale + (i / TICKS) * Math.PI * 2;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const r0 = R * 0.905, r1 = R * (0.905 + len);
+        ctx.moveTo(cx + ca * r0, cy + sa * r0);
+        ctx.lineTo(cx + ca * r1, cy + sa * r1);
+      }
+      ctx.strokeStyle = ink(H, lightness, alpha * heat);
+      ctx.lineWidth = wide;
       ctx.stroke();
     }
 
-    // The grain. fillRect beats arc() by a mile for a single pixel.
-    for (const m of motes) {
-      const [px, py, pz] = m.p;
-      const rx = px * cos + pz * sin, rz = pz * cos - px * sin;
-      const depth = (rz + 1) / 2;
-      const alpha = m.bright * (0.04 + depth * depth * 0.8) * heat;
-      if (alpha < 0.02) continue;
-      const k = (focal / (focal - rz * m.shell)) * m.shell * R;
-      ctx.fillStyle = "hsla(" + (hue + 10) + ", 100%, " + (58 + depth * 30) +
-                      "%, " + alpha.toFixed(3) + ")";
-      ctx.fillRect(cx + rx * k, cy - py * k, 1.3, 1.3);
+    // --- 3. segmented arcs, turning against each other -------------------
+    for (const [radius, count, fill, rate, wide, light, alpha] of
+         [[0.985, 3, 0.26, 0.30, 2.0, 74, 0.55],
+          [0.845, 5, 0.12, -0.52, 1.4, 62, 0.42],
+          [0.700, 2, 0.34, 0.74, 1.1, 58, 0.30]]) {
+      // `fill` is how much of the whole circle each segment covers, so the
+      // gaps are what is left over: three segments of 0.26 leaves eighty
+      // degrees of air, which is what stops it reading as a solid ring.
+      const base = turn * rate * 6;
+      ctx.lineWidth = wide;
+      ctx.strokeStyle = ink(H, light, alpha * heat);
+      for (let i = 0; i < count; i++) {
+        const from = base + (i / count) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, R * radius, from, from + fill * Math.PI * 2);
+        ctx.stroke();
+      }
     }
 
-    // The heart, burning out to white where everything overlaps.
-    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.42);
-    core.addColorStop(0, "hsla(" + (hue + 22) + ", 100%, 92%, " + (0.5 * heat).toFixed(3) + ")");
-    core.addColorStop(0.35, "hsla(" + (hue + 10) + ", 100%, 62%, " + (0.22 * heat).toFixed(3) + ")");
-    core.addColorStop(1, "transparent");
-    ctx.fillStyle = core;
+    // --- 4. the sweep: a bright head with a fading tail ------------------
+    const head = turn * 2.4;
+    for (let i = 0; i < 9; i++) {
+      const a = head - i * 0.055;
+      const alpha = (1 - i / 9) ** 2 * 0.5 * heat;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R * 0.905, a - 0.055, a);
+      ctx.strokeStyle = ink(H + 6, 76 - i * 2, alpha);
+      ctx.lineWidth = 2.6 - i * 0.18;
+      ctx.stroke();
+    }
+
+    // --- 5. the body: windings round a hub -------------------------------
+    // Still, while everything measuring it turns. A reactor that spins is a
+    // spinner; the stillness is what makes the rest read as instrumentation.
+    //
+    // Eighteen narrow windings rather than twelve fat ones: fat wedges came
+    // out looking like the teeth of a cog, and the thing they are meant to
+    // be is wire. Each is brightest at its inner edge, where the core is.
+    const inner = R * 0.425, outer = R * 0.605;
+    for (let i = 0; i < COILS; i++) {
+      const mid = (i / COILS) * Math.PI * 2 - Math.PI / 2;
+      const half = (Math.PI / COILS) * 0.60;
+      const lift = 0.78 + 0.22 * Math.sin(breath * 1.5 + i * 0.42);
+      ctx.beginPath();
+      ctx.arc(cx, cy, inner, mid - half, mid + half);
+      ctx.arc(cx, cy, outer, mid + half, mid - half, true);
+      ctx.closePath();
+      const wedge = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+      wedge.addColorStop(0, ink(H + 12, 84, 0.52 * heat * lift));
+      wedge.addColorStop(0.42, ink(H + 4, 60, 0.17 * heat * lift));
+      wedge.addColorStop(1, ink(H - 4, 46, 0.035 * heat));
+      ctx.fillStyle = wedge;
+      ctx.fill();
+      ctx.strokeStyle = ink(H + 6, 74, 0.26 * heat * lift);
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+    }
+
+    // The rings that pin the windings down, and the containment ring the
+    // core sits inside. That one is the brightest circle on the screen: it
+    // is the edge of the bit that is actually glowing.
+    for (const [radius, wide, light, alpha] of
+         [[0.425, 1.1, 72, 0.44], [0.605, 1.1, 68, 0.40],
+          [0.305, 2.0, 96, 0.92], [0.272, 0.9, 74, 0.34]]) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, R * radius, 0, Math.PI * 2);
+      ctx.strokeStyle = ink(H, light, alpha * heat);
+      ctx.lineWidth = wide;
+      ctx.stroke();
+    }
+
+    // The triangle. One shape, dead centre, perfectly still - and the single
+    // most recognisable thing about the object this is meant to be. It also
+    // gives the eye something with a straight edge among all the circles.
+    const tri = R * 0.185;
     ctx.beginPath();
-    ctx.arc(cx, cy, R * 0.42, 0, Math.PI * 2);
+    for (let i = 0; i < 3; i++) {
+      const a = -Math.PI / 2 + (i / 3) * Math.PI * 2;
+      ctx.lineTo(cx + Math.cos(a) * tri, cy + Math.sin(a) * tri);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = ink(H + 16, 98, 0.80 * heat * pulse);
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+    ctx.fillStyle = ink(H + 14, 92, 0.10 * heat * pulse);
     ctx.fill();
+
+    // --- 6. light falling in ---------------------------------------------
+    for (const m of MOTES) {
+      const r = m.r * R;
+      const fade = Math.min(1, (m.r - 0.30) * 3.4);       // dies into the core
+      const alpha = m.bright * fade * 0.75 * heat;
+      if (alpha < 0.02) continue;
+      ctx.fillStyle = ink(H + 12, 70 + m.bright * 26, alpha);
+      ctx.fillRect(cx + Math.cos(m.a) * r, cy + Math.sin(m.a) * r, m.size, m.size);
+    }
+
+    // --- 7. the core, burning out to white -------------------------------
+    // Out as far as the windings, so the light looks like it is coming
+    // from in there and spilling through them, rather than stopping short
+    // and leaving a ring of dead space the way it did at 0.355.
+    const core = R * 0.46 * (0.94 + 0.06 * pulse);
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, core);
+    glow.addColorStop(0, ink(H + 16, 100, 0.95 * heat));
+    glow.addColorStop(0.09, ink(H + 12, 92, 0.72 * heat));
+    glow.addColorStop(0.24, ink(H + 6, 70, 0.30 * heat));
+    glow.addColorStop(0.52, ink(H, 56, 0.07 * heat));
+    glow.addColorStop(1, ink(H, 50, 0));
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, core, 0, Math.PI * 2);
+    ctx.fill();
+
+    // and the flare off it: four spokes, which is what a bright point does
+    // to a lens and the cheapest honest way to say "this is very bright"
+    ctx.lineCap = "butt";
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + (i / 4) * Math.PI * 2;
+      const reach = R * (0.30 + 0.10 * pulse);
+      const flare = ctx.createLinearGradient(cx, cy, cx + Math.cos(a) * reach,
+                                             cy + Math.sin(a) * reach);
+      flare.addColorStop(0, ink(H + 12, 96, 0.34 * heat));
+      flare.addColorStop(1, ink(H, 70, 0));
+      ctx.strokeStyle = flare;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a) * reach, cy + Math.sin(a) * reach);
+      ctx.stroke();
+    }
+    ctx.lineCap = "round";
 
     ctx.globalCompositeOperation = "source-over";
   }
