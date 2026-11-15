@@ -1,4 +1,5 @@
 """Offline tests: no microphone, no API key, no network."""
+import io
 import re
 import shutil
 import tempfile
@@ -1387,7 +1388,16 @@ class Inventions(unittest.TestCase):
 
 
 class SilentSegments(unittest.TestCase):
-    """Whisper rates how likely each segment is to be silence; reo now listens."""
+    """Whisper rates how likely each segment is to be silence; reo now listens.
+
+    Pinned to the local path: this is about what reo does with the segments,
+    and without pinning it these quietly started posting their audio to Groq.
+    """
+
+    def setUp(self):
+        local = mock.patch.object(config, "HEARING", "local")
+        local.start()
+        self.addCleanup(local.stop)
 
     def _listener(self, segments):
         listener = Listener.__new__(Listener)
@@ -1846,6 +1856,7 @@ class NeverWaitForEver(unittest.TestCase):
 
     def test_a_stuck_attempt_does_not_hold_the_model_for_ever(self):
         """The next command gets told the model is busy, not left hanging."""
+        self.enterContext(mock.patch.object(config, "HEARING", "local"))
         listener = Listener.__new__(Listener)
         listener.language, listener.detected = "en", True
         listener._model_lock = threading.Lock()
@@ -2550,6 +2561,7 @@ class WhyItWasMissed(unittest.TestCase):
         self.assertEqual(listener.missed, "quiet")
 
     def test_whisper_inventing_words_is_called_garbled(self):
+        self.enterContext(mock.patch.object(config, "HEARING", "local"))
         listener = self._listener(np.full(16000, 0.07, dtype=np.float32))
         listener._transcribe = Listener._transcribe.__get__(listener)
         listener._voice = SimpleNamespace(ready=True)
@@ -2704,6 +2716,158 @@ class SearchingSomewhereElse(unittest.TestCase):
         """Nothing above run_tool has one, so a search that never came back
         would hang the whole assistant mid-reply."""
         self.assertTrue(getattr(tools, "SEARCH_TIMEOUT", 0) > 0)
+
+
+class HearingThroughGroq(unittest.TestCase):
+    """whisper-large-v3-turbo is on his key and is the biggest whisper there
+    is: 0.27s from his last word to the words being ready, against 3.37s for
+    the small model running here. The local one stays loaded as the fallback."""
+
+    def _listener(self, hosted_says=None, blows_up=False, local_says="local heard it"):
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.missed = ""
+        listener._voice = SimpleNamespace(ready=True)
+        listener._here = lambda clean: local_says
+        asked = {}
+
+        def ears():
+            if blows_up:
+                raise RuntimeError("no network")
+            return SimpleNamespace(audio=SimpleNamespace(
+                transcriptions=SimpleNamespace(create=make)))
+
+        def make(**kwargs):
+            asked.update(kwargs)
+            if isinstance(hosted_says, Exception):
+                raise hosted_says
+            return hosted_says
+
+        listener._ears = ears
+        return listener, asked
+
+    @staticmethod
+    def _answer(text, segments=None):
+        return SimpleNamespace(text=text, segments=segments)
+
+    def test_it_hears_through_groq_when_asked_to(self):
+        listener, asked = self._listener(self._answer(" Open chrome"))
+        with mock.patch.object(config, "HEARING", "hosted"):
+            self.assertEqual(listener._transcribe(
+                np.full(16000, 0.07, dtype=np.float32)), "Open chrome")
+        self.assertEqual(asked.get("model"), config.HOSTED_WHISPER)
+
+    def test_local_only_never_sends_anything(self):
+        """REO_HEARING=local has to mean nothing leaves the laptop."""
+        listener, asked = self._listener(self._answer(" should not be used"))
+        with mock.patch.object(config, "HEARING", "local"):
+            self.assertEqual(listener._transcribe(
+                np.full(16000, 0.07, dtype=np.float32)), "local heard it")
+        self.assertEqual(asked, {}, "it called out to Groq anyway")
+
+    def test_no_network_falls_back_to_the_model_here(self):
+        listener, _ = self._listener(blows_up=True)
+        with mock.patch.object(config, "HEARING", "hosted"):
+            self.assertEqual(listener._transcribe(
+                np.full(16000, 0.07, dtype=np.float32)), "local heard it")
+
+    def test_groq_refusing_falls_back_too(self):
+        listener, _ = self._listener(RuntimeError("429"))
+        with mock.patch.object(config, "HEARING", "hosted"):
+            self.assertEqual(listener._transcribe(
+                np.full(16000, 0.07, dtype=np.float32)), "local heard it")
+
+    def test_segments_groq_calls_silence_are_dropped(self):
+        """The same filter as the local path, on the same field."""
+        listener, _ = self._listener(self._answer("", segments=[
+            {"text": " Open it", "no_speech_prob": 0.1},
+            {"text": " Thanks for watching!", "no_speech_prob": 0.95}]))
+        with mock.patch.object(config, "HEARING", "hosted"):
+            self.assertEqual(listener._transcribe(
+                np.full(16000, 0.07, dtype=np.float32)), "Open it")
+
+    def test_segments_as_objects_work_too(self):
+        """The SDK hands back models, not dicts, depending on the version."""
+        listener, _ = self._listener(self._answer("", segments=[
+            SimpleNamespace(text=" Open it", no_speech_prob=0.1)]))
+        with mock.patch.object(config, "HEARING", "hosted"):
+            self.assertEqual(listener._transcribe(
+                np.full(16000, 0.07, dtype=np.float32)), "Open it")
+
+    def test_whisper_inventing_words_is_still_caught(self):
+        listener, _ = self._listener(
+            self._answer(" again and again and again and again"))
+        with mock.patch.object(config, "HEARING", "hosted"):
+            self.assertEqual(listener._transcribe(
+                np.full(16000, 0.07, dtype=np.float32)), "")
+        self.assertEqual(listener.missed, "garbled")
+
+    def test_the_sticky_guess_is_not_forced_on_it(self):
+        """That guess exists because working it out here is expensive. Groq
+        does it for nothing and better, and forcing it would push his Telugu
+        through an English model all session."""
+        listener, asked = self._listener(self._answer(" hello"))
+        listener.language, listener.detected = "en", True      # a guess
+        with mock.patch.object(config, "HEARING", "hosted"), \
+             mock.patch.object(config, "LANGUAGE", None):
+            listener._transcribe(np.full(16000, 0.07, dtype=np.float32))
+        self.assertNotIn("language", asked)
+
+    def test_a_language_he_pinned_himself_is_sent(self):
+        listener, asked = self._listener(self._answer(" namaste"))
+        with mock.patch.object(config, "HEARING", "hosted"), \
+             mock.patch.object(config, "LANGUAGE", "hi"):
+            listener._transcribe(np.full(16000, 0.07, dtype=np.float32))
+        self.assertEqual(asked.get("language"), "hi")
+
+    def test_his_vocabulary_goes_with_it(self):
+        """Proper nouns are most of what whisper gets wrong."""
+        listener, asked = self._listener(self._answer(" hello"))
+        with mock.patch.object(config, "HEARING", "hosted"):
+            listener._transcribe(np.full(16000, 0.07, dtype=np.float32))
+        self.assertIn("Hyderabad", asked.get("prompt", ""))
+
+    def test_a_recording_is_sent_as_a_wav(self):
+        listener, asked = self._listener(self._answer(" hello"))
+        with mock.patch.object(config, "HEARING", "hosted"):
+            listener._transcribe(np.full(16000, 0.07, dtype=np.float32))
+        name, payload, kind = asked["file"]
+        self.assertTrue(name.endswith(".wav"))
+        self.assertEqual(kind, "audio/wav")
+        self.assertTrue(payload.startswith(b"RIFF"))
+
+    def test_the_wav_really_is_the_recording(self):
+        import wave as wavelib
+        tone = (np.sin(np.linspace(0, 400, 16000)) * 0.5).astype(np.float32)
+        with wavelib.open(io.BytesIO(au_mod.as_wav(tone)), "rb") as f:
+            self.assertEqual(f.getframerate(), 16000)
+            self.assertEqual(f.getnchannels(), 1)
+            back = np.frombuffer(f.readframes(f.getnframes()), dtype=np.int16)
+        self.assertEqual(len(back), len(tone))
+        self.assertLess(float(np.abs(back / 32767 - tone).max()), 0.001)
+
+    def test_the_hosted_ear_is_built_once(self):
+        """Per call it cost 2.69s cold against 0.20s warm."""
+        made = []
+        listener = Listener.__new__(Listener)
+        with mock.patch("openai.OpenAI", lambda **kw: made.append(kw) or object()), \
+             mock.patch.object(providers, "hosting",
+                               lambda model, env=None: providers.Provider(
+                                   "groq", "k", "https://api.groq.com/openai/v1", "m")):
+            listener._ears()
+            listener._ears()
+            listener._ears()
+        self.assertEqual(len(made), 1, "rebuilt the client every time")
+
+    def test_whisper_is_asked_of_groq_and_not_the_laptop(self):
+        """ollama does not host whisper, and must never be handed the audio."""
+        here = providers.Provider("ollama", "x", "http://localhost:11434/v1", "q")
+        env = {"LLM_API_KEY": "k", "LLM_BASE_URL": "https://api.groq.com/openai/v1",
+               "LLM_MODEL": "m", "REO_PREFER_LOCAL": "1"}
+        with mock.patch.object(providers, "local", lambda env=None: here):
+            host = providers.hosting("whisper-large-v3-turbo", env)
+        self.assertIsNotNone(host)
+        self.assertNotEqual(host.name, "ollama")
 
 
 if __name__ == "__main__":

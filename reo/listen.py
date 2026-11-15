@@ -384,6 +384,67 @@ class Listener:
         audio = np.concatenate(frames).flatten()
         return Attempt(lambda: self._transcribe(audio))
 
+    def _ears(self):
+        """The client for hosted hearing, built once and kept.
+
+        Built per call it cost 2.69s on a cold one against 0.20s warm, which
+        is the whole saving thrown away.
+        """
+        if getattr(self, "_ears_client", None) is None:
+            from openai import OpenAI
+
+            from . import providers
+            host = providers.hosting(config.HOSTED_WHISPER)
+            if host is None:
+                return None
+            self._ears_client = OpenAI(api_key=host.key, base_url=host.base_url,
+                                       timeout=config.HOSTED_HEARING_TIMEOUT,
+                                       max_retries=0)
+        return self._ears_client
+
+    def _hosted(self, clean):
+        """Words from Groq, or None - which means do it here instead.
+
+        None rather than an exception on purpose: no network, a spent key and
+        a bad day at Groq are all the same thing from here, and all of them
+        are answered by the model already sitting in memory.
+        """
+        # Only a language he pinned himself, never the sticky guess. That
+        # guess exists because working it out locally costs about as much as
+        # the transcription; Groq does it for nothing, and does it better.
+        # Passing the guess would force his Telugu through an English model
+        # for the rest of the session because the first thing he said was
+        # in English.
+        extra = {"language": config.LANGUAGE} if config.LANGUAGE else {}
+        try:
+            # Inside the try on purpose: building the client can fail too -
+            # no key, a bad url, a missing import - and that is just as good
+            # a reason to use the model here as the request failing.
+            client = self._ears()
+            if client is None:
+                return None
+            answer = client.audio.transcriptions.create(
+                model=config.HOSTED_WHISPER,
+                file=("speech.wav", au.as_wav(clean), "audio/wav"),
+                response_format="verbose_json",
+                prompt=config.VOCABULARY or None, **extra)
+        except Exception as e:
+            print(f"  [listen] groq could not hear that ({type(e).__name__}); "
+                  f"using the model here")
+            return None
+        segments = getattr(answer, "segments", None) or []
+        if not segments:
+            return (getattr(answer, "text", "") or "").strip()
+        # Same filter as the local path: whisper rates how likely each segment
+        # is to be silence, and taking its word for that costs nothing.
+        kept = []
+        for segment in segments:
+            get = segment.get if isinstance(segment, dict) else (
+                lambda k, d=None: getattr(segment, k, d))
+            if float(get("no_speech_prob", 0.0) or 0.0) <= config.NO_SPEECH_PROB:
+                kept.append(str(get("text", "") or ""))
+        return " ".join(kept).strip()
+
     def _transcribe(self, raw) -> str:
         """Audio in, words out. Everything that is not words is dropped here."""
         # Whisper does not return nothing for silence - it invents. Only needed
@@ -393,6 +454,17 @@ class Listener:
             print("  (only room noise)")
             return ""
         clean = au.normalize(raw)
+        text = self._hosted(clean) if config.HEARING == "hosted" else None
+        if text is None:
+            text = self._here(clean)
+        if au.looks_hallucinated(text):
+            self.missed = "garbled"
+            return ""
+        return text
+
+    def _here(self, clean) -> str:
+        """The model on this machine. The fallback, and the whole thing when
+        REO_HEARING=local."""
         if not self._one_at_a_time.acquire(timeout=config.TRANSCRIBE_TIMEOUT):
             print("  [listen] the speech model is still busy with the last one")
             return ""
@@ -410,9 +482,6 @@ class Listener:
                 if getattr(s, "no_speech_prob", 0.0) <= config.NO_SPEECH_PROB).strip()
         finally:
             self._one_at_a_time.release()
-        if au.looks_hallucinated(text):
-            self.missed = "garbled"
-            return ""
         return text
 
     def listen(self, stop_now=None) -> str:

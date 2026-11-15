@@ -196,7 +196,8 @@ class Pool:
 
 
 # Models only one service hosts, whatever else is configured.
-EXCLUSIVE = {"canopylabs/orpheus": "api.groq.com"}
+EXCLUSIVE = {"canopylabs/orpheus": "api.groq.com",
+             "whisper-large": "api.groq.com"}
 
 
 def hosting(model: str, env=None) -> Provider | None:

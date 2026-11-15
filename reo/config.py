@@ -23,6 +23,19 @@ LOCAL_TIMEOUT = float(os.getenv("REO_LOCAL_TIMEOUT", "180"))
 # How hard a reasoning model should think before a one-sentence answer.
 # "low", "medium", "high", or blank to leave it to the model.
 REASONING_EFFORT = os.getenv("REO_REASONING", "low").strip()
+# Where speech becomes words. "hosted" sends the recording to Groq's
+# whisper-large-v3-turbo, which is the biggest whisper there is and already
+# on the key: 0.20s against the local model's 2.65s on the same clip, with
+# none of its 0.66-to-2.4 second swing. "local" runs the small model on this
+# machine instead, and nothing ever leaves the laptop.
+#
+# The local model is loaded either way. It is what answers when there is no
+# network, when the key is spent, or when Groq says no.
+HEARING = os.getenv("REO_HEARING", "hosted").strip().lower()
+HOSTED_WHISPER = os.getenv("REO_HOSTED_WHISPER", "whisper-large-v3-turbo")
+# Short on purpose: past this it is quicker to do it here than keep waiting.
+HOSTED_HEARING_TIMEOUT = float(os.getenv("REO_HOSTED_HEARING_TIMEOUT", "10"))
+
 # "small" hears an accent better, and on this machine takes about 7s against
 # base's 2.3s on the same clip - measured across thread counts and both int8
 # modes, none of which moved it. That is slower than the problem it fixes, so

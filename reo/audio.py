@@ -21,6 +21,22 @@ def normalize(audio: np.ndarray) -> np.ndarray:
     return audio * min(TARGET_PEAK / peak, MAX_GAIN)
 
 
+def as_wav(audio: np.ndarray, rate: int = 16000) -> bytes:
+    """A recording as a .wav file in memory, for sending somewhere."""
+    import io
+    import wave
+
+    samples = (np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0)
+               * 32767).astype(np.int16)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as file:
+        file.setnchannels(1)
+        file.setsampwidth(2)
+        file.setframerate(rate)
+        file.writeframes(samples.tobytes())
+    return buffer.getvalue()
+
+
 def has_speech(audio: np.ndarray, floor: float) -> bool:
     """Is there anything in here louder than a quiet room?
 

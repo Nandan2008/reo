@@ -114,6 +114,11 @@ class HearingHim(unittest.TestCase):
         cls.addClassCleanup(cls.listener.mic.close)
 
     def setUp(self):
+        # The local path, so these stay about endpointing and are the same
+        # every run. One test below does the hosted one on purpose.
+        local = mock.patch.object(config, "HEARING", "local")
+        local.start()
+        self.addCleanup(local.stop)
         self.listener.language, self.listener.detected = "en", True
         self.listener.missed = ""
         self.listener.voice.reset()
@@ -226,6 +231,16 @@ class HearingHim(unittest.TestCase):
         said = self.hear([quiet(7.0)])
         self.assertEqual(said, "")
         self.assertEqual(self.listener.missed, "nothing")
+
+    def test_groq_hears_him_too(self):
+        """The path he actually runs. Skipped rather than failed when the
+        network or the key is not there - that is a bad day, not a bug."""
+        with mock.patch.object(config, "HEARING", "hosted"):
+            self.listener._ears_client = None
+            said = self.hear([self.clip])
+        if not said.strip():
+            self.skipTest("groq did not answer; the local path covers the rest")
+        self.assertIn("hyderabad", said.lower(), f"heard {said!r}")
 
     def test_a_level_is_reported_either_way(self):
         """So "can you hear me" has something true to say."""

@@ -112,10 +112,43 @@ The fix that works is `REO_VOCABULARY`: a list of names it should expect. It
 cannot spell a word it has never been told, and telling it costs nothing
 measurable. `REO_BEAM=5` widens the search for about 0.2s.
 
-A bigger model is the obvious other answer and it did not survive measurement.
-`small` hears an accent better, but on this laptop it takes about 7s against
-`base`'s 2.3s on the same clip, and neither thread count nor `int8_float32`
-moved it. Seven seconds is slower than the problem it solves, so `base` stays.
+A bigger model is the obvious other answer, and a bigger model running *here*
+did not survive measurement. `small` hears an accent better, but on this laptop
+it takes about 7s against `base`'s 2.3s on the same clip, and neither thread
+count nor `int8_float32` moved it. Seven seconds is slower than the problem it
+solves.
+
+### Where the hearing happens
+
+`REO_HEARING=hosted`, the default, sends the recording to Groq's
+`whisper-large-v3-turbo` - the biggest whisper there is, already on the key,
+and nothing to install. Measured on the same six seconds of speech, from the
+last word to the words being ready:
+
+| | |
+|---|---|
+| hosted `large-v3-turbo` | **0.27s** |
+| local `base` | 3.37s |
+
+It also kills the local model's swing. The same transcription here costs 0.66s
+warm and 2.4s once the laptop has been sitting idle - three and a half times,
+for reasons outside reo.
+
+**This sends your voice to Groq.** That is the trade, and it is the only part
+of reo that leaves the machine apart from the questions themselves. If you
+would rather it did not, `REO_HEARING=local` in `.env` puts it back: nothing
+goes anywhere, at the cost of those three seconds.
+
+The local model is loaded either way, because it is the fallback. No network,
+a spent key, a bad day at Groq - anything at all that goes wrong with the
+hosted ear, including failing to build the client, and reo uses the model
+already sitting in memory. It says so in the console when it does.
+
+One thing the hosted ear does better for free: it works the language out
+itself. Locally that costs about as much as the transcription, so reo guesses
+once and reuses the guess - which means the first English sentence of a
+session would force the Telugu after it through an English model. The hosted
+path is only told a language if you pinned one yourself in `REO_LANGUAGE`.
 Set `REO_WHISPER_MODEL=small` if you would rather wait than repeat yourself.
 
 To choose for yourself rather than take my word for it:
