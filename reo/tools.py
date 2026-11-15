@@ -9,6 +9,7 @@ import webbrowser
 import psutil
 
 from . import config, pointer, system, workspace
+from .chats import chats
 
 
 
@@ -286,6 +287,7 @@ FUNCTIONS = {
     "remember": remember,
     "forget": forget,
     "recall": recall,
+    "past_chats": lambda about: chats.search(about),
     "open_search": open_search,
     "read_page": read_page,
     "run_command": run_command,
@@ -517,6 +519,19 @@ EVERY_TOOL = [
         },
     },
     {
+        "name": "past_chats",
+        "description": ("Search what the two of you have said before, from any "
+                        "day. Use it when he refers to something earlier that "
+                        "is not in front of you - \"what did I tell you about "
+                        "my sister\", \"what did we decide yesterday\"."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"about": {"type": "string",
+                                     "description": "words to look for"}},
+            "required": ["about"],
+        },
+    },
+    {
         "name": "recall",
         "description": ("Only for a fact NOT in the remembered list you were already given. Never for one that is."),
         "input_schema": {
@@ -584,7 +599,7 @@ TOOLS = [spec for spec in EVERY_TOOL if allowed(spec)]
 READ_ONLY = frozenset({
     "search_web", "look_up", "read_page", "get_datetime", "get_battery",
     "recall", "list_apps", "list_windows", "cursor_position",
-    "read_file", "list_files",
+    "read_file", "list_files", "past_chats",
 })
 
 

@@ -1,5 +1,6 @@
 """Offline tests: no microphone, no API key, no network."""
 import io
+import json
 import re
 import shutil
 import tempfile
@@ -17,6 +18,8 @@ from openai import APIConnectionError, APIStatusError, RateLimitError
 from reo import config, fastpath, providers, tools
 from reo import memory as memory_module
 from reo import brain as brain_module
+from reo import chats as chatsmod
+from reo.chats import Chats
 from reo import pointer
 from reo import undo
 from reo import workspace
@@ -3271,6 +3274,115 @@ class OneNameNotThree(unittest.TestCase):
         again = Memory(m.path)
         self.assertEqual(len(again.facts), 1)
         self.assertIn("Nandan Sai", again.recall())
+
+
+class RememberingTheConversation(unittest.TestCase):
+    """Closing reo threw the conversation away. Ask it something on Tuesday
+    and follow it up on Wednesday and it had no idea what "it" was."""
+
+    def _chats(self):
+        home = Path(tempfile.mkdtemp(prefix="reo-chats-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        return Chats(home / "c.jsonl")
+
+    def test_an_exchange_survives_being_closed(self):
+        store = self._chats()
+        store.add("my sisters name is anu", "Got it.")
+        again = Chats(store.path)
+        self.assertEqual(again.how_many(), 1)
+
+    def test_the_last_few_come_back_as_messages(self):
+        store = self._chats()
+        store.add("open chrome", "Chrome is open.")
+        store.add("what is the capital of australia", "Canberra.")
+        carried = store.carry_over()
+        self.assertEqual([m["role"] for m in carried],
+                         ["user", "assistant", "user", "assistant"])
+        self.assertEqual(carried[0]["content"], "open chrome")
+        self.assertEqual(carried[-1]["content"], "Canberra.")
+
+    def test_only_a_handful_is_carried(self):
+        """Every carried message is resent on every request, against an 8000
+        token minute. It is a few turns, not a diary."""
+        store = self._chats()
+        for i in range(30):
+            store.add(f"question {i}", f"answer {i}")
+        self.assertEqual(len(store.carry_over()), chatsmod.CARRY * 2)
+
+    def test_something_from_another_day_says_when_it_was(self):
+        """Without it, "open it again" refers to something reo thinks
+        happened a minute ago."""
+        store = self._chats()
+        store.path.write_text(json.dumps(
+            {"when": "2026-11-09T10:00:00", "you": "open chrome",
+             "reo": "Done."}) + "\n", encoding="utf-8")
+        said = store.carry_over()[0]["content"]
+        self.assertIn("2026-11-09", said)
+        self.assertIn("open chrome", said)
+
+    def test_today_is_not_laboured(self):
+        store = self._chats()
+        store.add("open chrome", "Done.")
+        self.assertEqual(store.carry_over()[0]["content"], "open chrome")
+
+    def test_it_can_look_further_back_than_it_carries(self):
+        store = self._chats()
+        store.add("my sisters name is anu", "Got it.")
+        for i in range(10):
+            store.add(f"filler {i}", f"answer {i}")
+        found = store.search("sister")
+        self.assertIn("anu", found.lower())
+
+    def test_searching_needs_every_word_to_match(self):
+        store = self._chats()
+        store.add("my sisters name is anu", "Got it.")
+        store.add("open chrome", "Done.")
+        self.assertIn("Nothing", store.search("sister chrome"))
+
+    def test_nothing_found_says_so_plainly(self):
+        store = self._chats()
+        store.add("open chrome", "Done.")
+        self.assertIn("Nothing", store.search("quantum physics"))
+
+    def test_a_half_written_line_costs_one_exchange_not_the_file(self):
+        """Reo is killed by closing its window, which can cut a line in half."""
+        store = self._chats()
+        store.add("first", "one")
+        store.add("second", "two")
+        with open(store.path, "a", encoding="utf-8") as f:
+            f.write('{"when": "2026-11-15T10:00:00", "you": "third", "re')
+        self.assertEqual(store.how_many(), 2)
+        self.assertIn("first", store.search("first"))
+
+    def test_an_empty_thing_said_is_not_recorded(self):
+        store = self._chats()
+        store.add("", "Done.")
+        store.add("   ", "Done.")
+        self.assertEqual(store.how_many(), 0)
+
+    def test_no_file_yet_is_not_an_error(self):
+        home = Path(tempfile.mkdtemp(prefix="reo-chats-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        store = Chats(home / "never-written.jsonl")
+        self.assertEqual(store.carry_over(), [])
+        self.assertEqual(store.how_many(), 0)
+        self.assertIn("Nothing", store.search("anything"))
+
+    def test_saving_cannot_take_the_assistant_down(self):
+        store = self._chats()
+        with mock.patch("builtins.open", side_effect=OSError("disk full")):
+            store.add("something", "Done.")      # must not raise
+
+    def test_looking_back_is_a_tool_the_model_has(self):
+        self.assertIn("past_chats", tools.FUNCTIONS)
+        self.assertIn("past_chats", {spec["name"] for spec in tools.TOOLS})
+        self.assertIn("past_chats", tools.READ_ONLY)
+
+    def test_the_conversation_is_not_committed_to_the_repository(self):
+        """It is his conversation."""
+        ignored = (Path(__file__).resolve().parent.parent / ".gitignore"
+                   ).read_text(encoding="utf-8")
+        self.assertIn("chats.jsonl", ignored)
 
 
 if __name__ == "__main__":

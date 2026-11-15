@@ -350,6 +350,32 @@ It is told today's date, and told never to put a remembered year into a search. 
 one rule matters: asked for the most recent World Cup it used to search for the year
 it half-remembered, so the web only ever confirmed what it already believed.
 
+## What it remembers from before
+
+Closing reo used to throw the conversation away. Ask it something on Tuesday,
+follow it up on Wednesday, and it had no idea what "it" was - and "what did we
+talk about yesterday" was simply unanswerable.
+
+Every exchange is now kept in `chats.jsonl`, and two different things are done
+with it, because they want different storage.
+
+**Carrying on.** The last three exchanges go back into the conversation at
+startup, so a follow-up after a restart still has something to follow. That is
+deliberately a handful of turns and not a diary: every carried message is
+resent on every request, against an 8000 token minute. Anything from a
+previous day is marked with its date, or "open it again" means something reo
+thinks happened a minute ago.
+
+**Looking back.** Everything ever said stays on disk and `past_chats` searches
+it, which costs nothing until reo actually goes looking. That is what answers
+"what did I tell you about my sister" a week later.
+
+One line of JSON per exchange, appended. Not a single JSON array: reo is
+killed by closing its window, and a half-written array is an unreadable file
+where a half-written last line is one lost exchange.
+
+It is your conversation, so `chats.jsonl` is not committed.
+
 ## What it remembers
 
 Tell it something about yourself and it keeps it. "My name is Nandan", "I prefer

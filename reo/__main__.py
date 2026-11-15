@@ -8,6 +8,7 @@ import threading
 from . import config, fastpath, providers
 from .stats import session as stats
 from .brain import Brain, OutOfAllowance
+from .chats import chats
 from .listen import MISSED, Listener
 from .speak import speak
 from . import tools
@@ -181,6 +182,7 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
         # keep the exchange in history, or a follow-up loses the thread
         brain.history.append({"role": "user", "content": text})
         brain.history.append({"role": "assistant", "content": quick})
+        chats.add(text, quick)
         stats.add_reply(heard_in, 0.0, spoke, used_model=False)
         print(f"  [time] {_heard_detail(heard_in, listener)}  "
               f"answered directly (no model)  spoke {spoke:.1f}s")
@@ -201,6 +203,7 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
     thought = time.time() - started
 
     spoke = _said(reply or "Done.", ui, toggle, cut_in)
+    chats.add(text, reply)
 
     # Where a reply's time actually went, so slowness can be read off the log
     # instead of guessed at.
@@ -238,6 +241,14 @@ def main():
     threading.Thread(target=tools.warm_up, daemon=True).start()
 
     listener, brain = Listener(), Brain()
+    # Closing reo used to throw the conversation away, so a follow-up the
+    # next morning had nothing to follow. The last few exchanges come back;
+    # everything older is on disk and reo can search it when asked.
+    earlier = chats.carry_over()
+    if earlier:
+        brain.history.extend(earlier)
+        print(f"Carrying on from {len(earlier) // 2} earlier exchange(s); "
+              f"{chats.how_many()} kept in all.")
 
     waker = toggle = combination = None
     if config.MODE == "wake":
