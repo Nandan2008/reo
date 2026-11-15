@@ -96,9 +96,11 @@ def _heard_detail(heard_in: float, listener) -> str:
     """Recording and transcribing in one line. They are both inside "heard",
     and only one of them is reo's fault."""
     stt = getattr(listener, "transcribe_seconds", 0.0)
+    where = getattr(listener, "heard_by", "")
     if not stt:
         return f"heard {heard_in:.1f}s"
-    return f"heard {heard_in:.1f}s (you {max(heard_in - stt, 0.0):.1f}s + stt {stt:.1f}s)"
+    return (f"heard {heard_in:.1f}s (you {max(heard_in - stt, 0.0):.1f}s + "
+            f"stt {stt:.1f}s{' ' + where if where else ''})")
 
 
 def _hand_back(listener) -> None:

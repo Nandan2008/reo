@@ -2870,5 +2870,144 @@ class HearingThroughGroq(unittest.TestCase):
         self.assertNotEqual(host.name, "ollama")
 
 
+class EnoughFetching(unittest.TestCase):
+    """Every tool has its own timeout but nothing added them up, and the
+    model can ask for round after round. One reply in his log took 18.5
+    seconds, which from where he is sitting is reo having died."""
+
+    def _brain(self, rounds, each_takes):
+        """A brain that asks for one tool per round, each taking `each_takes`."""
+        ran = []
+        brain = Brain.__new__(Brain)
+        brain.history = []
+        brain._clients = {}
+        brain.pool = providers.Pool([
+            providers.Provider("p", "k", "https://p.invalid", "m")])
+
+        asked = {"left": rounds}
+
+        def complete(with_tools):
+            if asked["left"] > 0:
+                asked["left"] -= 1
+                call = SimpleNamespace(id=f"c{asked['left']}", function=SimpleNamespace(
+                    name="search_web", arguments='{"query": "x"}'))
+                return SimpleNamespace(choices=[SimpleNamespace(
+                    message=SimpleNamespace(tool_calls=[call], content=""),
+                    finish_reason="stop")])
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(tool_calls=None, content="[neutral] Done."),
+                finish_reason="stop")])
+
+        brain._complete = complete
+
+        def slow(name, args):
+            ran.append(name)
+            time.sleep(each_takes)
+            return "some result"
+
+        return brain, ran, slow
+
+    def test_a_quick_reply_is_not_interfered_with(self):
+        brain, ran, slow = self._brain(rounds=2, each_takes=0.01)
+        import reo.brain as brainmod
+        with mock.patch.object(brainmod, "run_tool", slow):
+            self.assertEqual(brain.think("go"), "[neutral] Done.")
+        self.assertEqual(len(ran), 2, "it stopped fetching when it had time left")
+
+    def test_it_stops_fetching_once_the_budget_is_gone(self):
+        brain, ran, slow = self._brain(rounds=6, each_takes=0.05)
+        import reo.brain as brainmod
+        with mock.patch.object(brainmod, "run_tool", slow), \
+             mock.patch.object(config, "TOOL_BUDGET", 0.12):
+            began = time.time()
+            self.assertEqual(brain.think("go"), "[neutral] Done.")
+            took = time.time() - began
+        self.assertLess(len(ran), 6, "it kept fetching past the budget")
+        self.assertLess(took, 1.0)
+
+    def test_the_calls_still_get_an_answer_each(self):
+        """Every tool_calls entry must have a result beside it or the next
+        request is a 400: that is what broke reo for a whole evening.
+
+        Trimming is held off, or there is nothing left to look at and this
+        passes by comparing two empty lists.
+        """
+        brain, ran, slow = self._brain(rounds=5, each_takes=0.05)
+        import reo.brain as brainmod
+        with mock.patch.object(brainmod, "run_tool", slow), \
+             mock.patch.object(Brain, "_trim_history", lambda self: None), \
+             mock.patch.object(config, "TOOL_BUDGET", 0.08):
+            brain.think("go")
+        wanted = [c["id"] for m in brain.history
+                  for c in (m.get("tool_calls") or [])]
+        answered = [m["tool_call_id"] for m in brain.history
+                    if m.get("role") == "tool"]
+        self.assertEqual(sorted(wanted), sorted(answered),
+                         "a tool call was left without a result")
+
+    def test_it_is_told_to_answer_rather_than_told_nothing(self):
+        brain, ran, slow = self._brain(rounds=4, each_takes=0.05)
+        import reo.brain as brainmod
+        with mock.patch.object(brainmod, "run_tool", slow), \
+             mock.patch.object(Brain, "_trim_history", lambda self: None), \
+             mock.patch.object(config, "TOOL_BUDGET", 0.08):
+            brain.think("go")
+        said = [m["content"] for m in brain.history if m.get("role") == "tool"]
+        self.assertTrue(any("Answer now" in s for s in said),
+                        f"the model was given no reason to stop: {said}")
+
+    def test_the_budget_is_a_sane_length(self):
+        """Long enough for a real search and a page read, short enough that
+        it is not reo having died."""
+        self.assertGreaterEqual(config.TOOL_BUDGET, 10)
+        self.assertLessEqual(config.TOOL_BUDGET, 30)
+
+
+class WhichEarHeardIt(unittest.TestCase):
+    """The log is how a complaint about lag gets diagnosed later."""
+
+    def _heard(self, where):
+        listener = Listener.__new__(Listener)
+        listener.transcribe_seconds = 0.4
+        listener.heard_by = where
+        return main._heard_detail(3.2, listener)
+
+    def test_it_says_when_groq_heard_him(self):
+        self.assertIn("groq", self._heard("groq"))
+
+    def test_it_says_when_the_laptop_did(self):
+        self.assertIn("here", self._heard("here"))
+
+    def test_the_old_shape_still_reads(self):
+        self.assertIn("you 2.8s", self._heard("groq"))
+
+    def test_nothing_transcribed_says_nothing_extra(self):
+        listener = Listener.__new__(Listener)
+        listener.transcribe_seconds = 0.0
+        self.assertEqual(main._heard_detail(1.0, listener), "heard 1.0s")
+
+    def test_the_fallback_is_recorded_as_here(self):
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.missed = ""
+        listener._voice = SimpleNamespace(ready=True)
+        listener._hosted = lambda clean: None          # groq could not
+        listener._here = lambda clean: "the laptop heard it"
+        with mock.patch.object(config, "HEARING", "hosted"):
+            listener._transcribe(np.full(16000, 0.07, dtype=np.float32))
+        self.assertEqual(listener.heard_by, "here")
+
+    def test_groq_answering_is_recorded_as_groq(self):
+        listener = Listener.__new__(Listener)
+        listener.language, listener.detected = "en", True
+        listener.missed = ""
+        listener._voice = SimpleNamespace(ready=True)
+        listener._hosted = lambda clean: "groq heard it"
+        listener._here = lambda clean: "should not be used"
+        with mock.patch.object(config, "HEARING", "hosted"):
+            listener._transcribe(np.full(16000, 0.07, dtype=np.float32))
+        self.assertEqual(listener.heard_by, "groq")
+
+
 if __name__ == "__main__":
     unittest.main()

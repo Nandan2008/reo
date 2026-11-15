@@ -15,6 +15,12 @@ REQUEST_TIMEOUT = float(os.getenv("REO_REQUEST_TIMEOUT", "25"))
 # of writing one. It is a ceiling, not a target: a reply that does not need
 # the room does not spend it.
 MAX_REPLY_TOKENS = int(os.getenv("REO_MAX_REPLY_TOKENS", "2600"))
+# How long the tools in one reply may take between them. Nothing used to cap
+# this: read_page allows 15s, a search allows 8s across four backends, and the
+# model can ask for several rounds of them. One reply in his log took 18.5
+# seconds with two tool calls in it, which from where he is sitting is reo
+# having died. Past this reo stops fetching and answers with what it has.
+TOOL_BUDGET = float(os.getenv("REO_TOOL_BUDGET", "18"))
 # The model on this machine gets far longer, because the first question after
 # a gap has to load five gigabytes into the graphics card: measured at 57.8s
 # cold against 0.5s warm. Twenty five seconds would fail every cold start,

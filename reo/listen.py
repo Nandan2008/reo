@@ -213,6 +213,7 @@ class Listener:
     # tests do, to get at one method without a model or a microphone - still
     # has them.
     missed = ""              # why the last command came to nothing
+    heard_by = ""            # "groq" or "here", so the log says which
     last_level = 0.0         # how loud he was, 0 to 1
     last_voice = 0.0         # seconds of it the detector called speech
     heard_nothing = False    # the device handed back digital zero
@@ -455,7 +456,9 @@ class Listener:
             return ""
         clean = au.normalize(raw)
         text = self._hosted(clean) if config.HEARING == "hosted" else None
+        self.heard_by = "groq"
         if text is None:
+            self.heard_by = "here"
             text = self._here(clean)
         if au.looks_hallucinated(text):
             self.missed = "garbled"

@@ -1,4 +1,5 @@
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -178,6 +179,7 @@ class Brain:
 
     def think(self, text: str) -> str:
         self.history.append({"role": "user", "content": text})
+        spent = 0.0          # seconds the tools have taken between them
         try:
             for _ in range(10):  # max tool steps per command
                 resp = self._complete(with_tools=True)
@@ -237,14 +239,28 @@ class Brain:
                 # time; pressing keys and moving windows cannot, because the
                 # order is the point. So: all-or-nothing, and only when every
                 # call in the batch is a lookup.
-                together = len(wanted) > 1 and all(
-                    tc.function.name in READ_ONLY for tc, _ in wanted)
-                if together:
-                    with ThreadPoolExecutor(max_workers=len(wanted)) as pool:
-                        results = list(pool.map(
-                            lambda job: run_tool(job[0].function.name, job[1]), wanted))
+                # And a ceiling on the lot of them. Every tool has its own
+                # timeout, but nothing added them up, and the model can ask
+                # for round after round: one reply in the log took 18.5s,
+                # which from where he is sitting is reo having died. The
+                # calls still get an answer each - the history has to stay
+                # paired - it is just an answer that says to stop fetching.
+                if spent > config.TOOL_BUDGET:
+                    print(f"  [brain] {spent:.0f}s of tools is enough; answering with "
+                          f"what it has")
+                    results = ["That is taking too long. Answer now, out loud, "
+                               "with what you already have." for _ in wanted]
                 else:
-                    results = [run_tool(tc.function.name, args) for tc, args in wanted]
+                    began = time.time()
+                    together = len(wanted) > 1 and all(
+                        tc.function.name in READ_ONLY for tc, _ in wanted)
+                    if together:
+                        with ThreadPoolExecutor(max_workers=len(wanted)) as pool:
+                            results = list(pool.map(
+                                lambda job: run_tool(job[0].function.name, job[1]), wanted))
+                    else:
+                        results = [run_tool(tc.function.name, args) for tc, args in wanted]
+                    spent += time.time() - began
 
                 for (tc, _), result in zip(wanted, results):
                     self.history.append({
