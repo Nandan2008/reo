@@ -11,11 +11,13 @@ from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
-from openai import APIStatusError, RateLimitError
+from openai import APIConnectionError, APIStatusError, RateLimitError
 
 from reo import config, fastpath, providers, tools
 from reo import memory as memory_module
+from reo import brain as brain_module
 from reo import pointer
+from reo import workspace
 from reo import system as reo_system
 from reo.memory import Memory
 from reo.audio import has_speech, looks_hallucinated
@@ -24,7 +26,7 @@ from reo import __main__ as main
 from reo import speak as speak_module
 from reo.__main__ import EXIT_PHRASES
 from reo.text import is_speech, normalize
-from reo.brain import KNOWN_TOOLS, SYSTEM, Brain
+from reo.brain import KNOWN_TOOLS, SYSTEM, Brain, OutOfAllowance
 from reo import audio as au_mod
 from reo import listen
 from reo.audio import VoiceDetector
@@ -360,26 +362,124 @@ class Playback(unittest.TestCase):
     """sd.wait() has no timeout. One hang ran to 72,304 seconds."""
 
     @staticmethod
-    def _play_with(stream):
-        from unittest import mock
-        from reo import speak
-        audio = np.zeros(1600, dtype=np.int16)        # 0.1s at 16kHz
-        with mock.patch.object(speak.sd, "play"), \
-             mock.patch.object(speak.sd, "stop") as stop, \
-             mock.patch.object(speak.sd, "get_stream", return_value=stream), \
-             mock.patch.object(speak, "PLAY_GRACE", 0.3):
-            speak._play(audio, 16000)
-        return stop
+    def _play(plays, until=None, grace=0.3):
+        """Play a short clip with a fake sound card.
+
+        `plays` decides whether the card actually takes the samples; when it
+        does not, nothing finishes and reo has to give up on its own.
+        """
+        audio = np.full(1600, 500, dtype=np.int16)    # 0.1s at 16kHz
+
+        def card(rate):
+            if plays:
+                threading.Thread(target=_drain, daemon=True).start()
+            return SimpleNamespace(active=True)
+
+        def _drain():
+            time.sleep(0.02)
+            out = np.zeros((1600, 1), dtype=np.int16)
+            for _ in range(6):
+                speak_module._feed(out, 400, None, None)
+                time.sleep(0.01)
+
+        with mock.patch.object(speak_module, "_speaker", card), \
+             mock.patch.object(speak_module, "PLAY_GRACE", grace):
+            return speak_module._play(audio, 16000, until)
 
     def test_returns_when_the_clip_finishes(self):
-        from unittest import mock
-        stop = self._play_with(mock.Mock(active=False))
-        stop.assert_not_called()
+        began = time.time()
+        self.assertFalse(self._play(plays=True))
+        self.assertLess(time.time() - began, 2.0)
 
-    def test_gives_up_when_the_device_never_frees(self):
-        from unittest import mock
-        stop = self._play_with(mock.Mock(active=True))
-        stop.assert_called_once()
+    def test_gives_up_when_the_card_never_takes_it(self):
+        """sd.wait() had no timeout at all, and one hang ran to 72,304s."""
+        began = time.time()
+        self.assertFalse(self._play(plays=False, grace=0.2))
+        self.assertLess(time.time() - began, 3.0)
+
+    def test_a_press_stops_it_where_it_got_to(self):
+        self.assertTrue(self._play(plays=False, until=lambda: True))
+
+    def test_the_speaker_is_not_reopened_for_every_reply(self):
+        """Opening one costs 287ms, measured, and it was being paid on every
+        single reply - by sd.play() as much as anything."""
+        made = []
+
+        class Stream:
+            def __init__(self, **kw): made.append(kw.get("samplerate"))
+            active = True
+            def start(self): pass
+            def stop(self): pass
+            def close(self): pass
+
+        with mock.patch.object(speak_module.sd, "OutputStream", Stream):
+            speak_module.close()
+            speak_module._speaker(24000)
+            speak_module._speaker(24000)
+            speak_module._speaker(24000)
+            self.assertEqual(made, [24000], "reopened the device")
+            speak_module._speaker(16000)        # a different rate does rebuild
+            self.assertEqual(made, [24000, 16000])
+            speak_module.close()
+
+
+class ArrivingAudio(unittest.TestCase):
+    """The clip is spoken while it is still downloading: the first bytes land
+    0.20s in and the last at 0.74s, so two thirds of that wait was transfer."""
+
+    @staticmethod
+    def _wav(samples, rate=24000):
+        import struct
+        body = samples.astype(np.int16).tobytes()
+        return (b"RIFF" + struct.pack("<I", 36 + len(body)) + b"WAVE"
+                + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+                + b"data" + struct.pack("<I", len(body)) + body)
+
+    def test_the_header_is_read_before_it_has_all_arrived(self):
+        whole = self._wav(np.full(4000, 300))
+        self.assertIsNone(speak_module._wav_shape(whole[:8]))
+        rate, channels, bits, start = speak_module._wav_shape(whole[:60])
+        self.assertEqual((rate, channels, bits), (24000, 1, 16))
+        self.assertEqual(start, 44)
+
+    def test_rubbish_is_not_mistaken_for_a_wav(self):
+        self.assertIsNone(speak_module._wav_shape(b"<html>not audio</html>"))
+
+    def test_the_pause_at_the_front_is_skipped(self):
+        clip = np.zeros(2000, dtype=np.int16)
+        clip[800:] = 4000
+        self.assertGreater(speak_module._first_sound(clip), 700)
+        self.assertEqual(speak_module._first_sound(np.zeros(10, dtype=np.int16)), 0)
+
+    def test_it_plays_what_arrives_in_pieces(self):
+        samples = np.concatenate([np.zeros(600), np.full(9000, 2500),
+                                  np.zeros(3000)]).astype(np.int16)
+        whole = self._wav(samples)
+        pieces = [whole[i:i + 900] for i in range(0, len(whole), 900)]
+        taken = []
+
+        def card(rate):
+            def drain():
+                out = np.zeros((2048, 1), dtype=np.int16)
+                for _ in range(80):
+                    speak_module._feed(out, 512, None, None)
+                    taken.append(1)
+                    time.sleep(0.004)
+            threading.Thread(target=drain, daemon=True).start()
+            return SimpleNamespace(active=True)
+
+        with mock.patch.object(speak_module, "_speaker", card):
+            cut = speak_module._play_arriving(iter(pieces))
+        self.assertFalse(cut)
+        self.assertTrue(taken)
+        # the silence on the end was trimmed off rather than played out
+        self.assertLess(speak_module._clip["end"], len(samples))
+        self.assertGreater(speak_module._clip["end"], 9000)
+
+    def test_a_response_with_no_wav_in_it_is_refused(self):
+        """So the caller can fall back to asking for the whole file."""
+        with self.assertRaises(speak_module._NoAudio):
+            speak_module._play_arriving(iter([b"not a wav at all"]))
 
 
 class ShellGuards(unittest.TestCase):
@@ -1988,24 +2088,171 @@ class CuttingReoOff(unittest.TestCase):
         self.assertEqual(len(asked), 1)
         self.assertIsNotNone(asked[0], "the voice was given no way to be stopped")
 
-    def test_playback_stops_when_told_to(self):
-        """The Groq voice plays a clip through sounddevice, and that loop is
-        where a press has to be noticed."""
-        import sounddevice as sd
-        stopped = []
-        stream = SimpleNamespace(active=True)
-        with mock.patch.object(sd, "play", lambda *a, **kw: None),              mock.patch.object(sd, "get_stream", lambda: stream),              mock.patch.object(sd, "stop", lambda: stopped.append(1)):
-            cut = speak_module._play(np.zeros(16000, dtype=np.int16), 16000,
+    def test_playback_stops_where_it_got_to(self):
+        """The Groq voice is the one his .env asks for, and its playback loop
+        is where a press has to be noticed."""
+        with mock.patch.object(speak_module, "_speaker",
+                               lambda rate: SimpleNamespace(active=True)):
+            cut = speak_module._play(np.full(16000, 400, dtype=np.int16), 16000,
                                      until=lambda: True)
         self.assertTrue(cut)
-        self.assertEqual(stopped, [1])
+        self.assertTrue(speak_module._clip["final"],
+                        "the clip was left running after he cut in")
 
-    def test_playback_left_alone_runs_to_the_end(self):
-        import sounddevice as sd
-        stream = SimpleNamespace(active=False)
-        with mock.patch.object(sd, "play", lambda *a, **kw: None),              mock.patch.object(sd, "get_stream", lambda: stream):
-            self.assertFalse(speak_module._play(
-                np.zeros(16000, dtype=np.int16), 16000, until=lambda: False))
+class ReosDesk(unittest.TestCase):
+    """Asked to write a program, reo could do everything except the writing.
+    The names come from speech, so where they are allowed to land matters."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp(prefix="reo-desk-"))
+        self.addCleanup(shutil.rmtree, self.home, True)
+        patch = mock.patch.object(config, "WORKSPACE", str(self.home))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_it_writes_what_it_was_given(self):
+        said = workspace.write("hello.py", "print('hi')\n")
+        self.assertIn("Wrote hello.py", said)
+        self.assertEqual((self.home / "hello.py").read_text(encoding="utf-8"),
+                         "print('hi')\n")
+
+    def test_a_subfolder_is_made_on_the_way(self):
+        workspace.write("notes/ideas.md", "one")
+        self.assertEqual((self.home / "notes" / "ideas.md").read_text(encoding="utf-8"),
+                         "one")
+
+    def test_replacing_keeps_the_one_before(self):
+        """A misheard file name should not cost him an hour of work."""
+        workspace.write("script.py", "first")
+        said = workspace.write("script.py", "second")
+        self.assertIn("Replaced", said)
+        self.assertEqual((self.home / "script.py").read_text(encoding="utf-8"), "second")
+        self.assertEqual((self.home / "script.py.last").read_text(encoding="utf-8"), "first")
+
+    def test_it_reads_back_what_it_wrote(self):
+        workspace.write("a.txt", "the contents")
+        self.assertEqual(workspace.read("a.txt"), "the contents")
+
+    def test_reading_something_that_is_not_there(self):
+        self.assertIn("no missing.txt", workspace.read("missing.txt"))
+
+    def test_listing_an_empty_desk_says_where_it_is(self):
+        self.assertIn(str(self.home), workspace.listing())
+
+    def test_listing_shows_what_is_there(self):
+        workspace.write("one.py", "x")
+        workspace.write("two/three.md", "y")
+        shown = workspace.listing()
+        self.assertIn("one.py", shown)
+        self.assertIn("three.md", shown)
+
+    def test_nothing_lands_outside_the_folder(self):
+        """The whole point. These come from speech, which mishears."""
+        for name in ["../escaped.py", "..\\escaped.py", "/etc/passwd",
+                     "C:/Windows/System32/drivers/etc/hosts",
+                     "notes/../../escaped.py", "....//escaped.py",
+                     "~/escaped.py", "", "   ", "a\x00b"]:
+            with self.subTest(name=name):
+                said = workspace.write(name, "should never be written")
+                self.assertNotIn("Wrote", said, f"{name!r} was allowed through")
+                self.assertNotIn("Replaced", said)
+        # and nothing at all appeared anywhere
+        self.assertEqual(list(self.home.rglob("*")), [])
+
+    def test_a_huge_file_is_refused(self):
+        said = workspace.write("big.txt", "x" * 500_000)
+        self.assertIn("limit", said)
+        self.assertFalse((self.home / "big.txt").exists())
+
+    def test_opening_something_that_is_not_there_does_not_launch_anything(self):
+        opened = []
+        with mock.patch.object(workspace.os, "startfile", lambda path: opened.append(path)):
+            self.assertIn("no ghost.py", workspace.show("ghost.py"))
+            self.assertEqual(opened, [])
+
+    def test_opening_a_file_it_wrote(self):
+        workspace.write("real.py", "x = 1")
+        opened = []
+        with mock.patch.object(workspace.os, "startfile", lambda path: opened.append(path)):
+            self.assertIn("Opened real.py", workspace.show("real.py"))
+        self.assertEqual(len(opened), 1)
+
+    def test_the_tools_are_wired_up(self):
+        for name in ("write_file", "read_file", "list_files", "open_file"):
+            self.assertIn(name, tools.FUNCTIONS)
+            self.assertIn(name, {spec["name"] for spec in tools.TOOLS})
+
+    def test_reading_and_listing_count_as_lookups(self):
+        """So several of them can run at once; writing cannot."""
+        self.assertIn("read_file", tools.READ_ONLY)
+        self.assertIn("list_files", tools.READ_ONLY)
+        self.assertNotIn("write_file", tools.READ_ONLY)
+        self.assertNotIn("open_file", tools.READ_ONLY)
+
+    def test_there_is_room_to_write_a_program(self):
+        """500 tokens stopped in the middle of one."""
+        self.assertGreaterEqual(config.MAX_REPLY_TOKENS, 2000)
+
+
+class AllowanceRunsOut(unittest.TestCase):
+    """The free tier is 8000 tokens a minute and a program is two thousand of
+    them. This is the one failure he will actually meet, and it is not a fault."""
+
+    def _brain(self, keys, fails_with):
+        brain = Brain.__new__(Brain)
+        brain.history = []
+        brain.pool = providers.Pool([
+            providers.Provider(f"p{i}", "k", "https://p.invalid", "m")
+            for i in range(keys)])
+        brain._clients = {}
+        brain._ask = fails_with
+        return brain
+
+    @staticmethod
+    def _rate_limited(*a, **kw):
+        raise RateLimitError("429", response=SimpleNamespace(
+            status_code=429, request=None, headers={}), body=None)
+
+    def test_one_key_out_of_allowance_says_so(self):
+        brain = self._brain(1, self._rate_limited)
+        with self.assertRaises(OutOfAllowance):
+            brain._complete(with_tools=True)
+
+    def test_every_key_out_of_allowance_says_so(self):
+        brain = self._brain(3, self._rate_limited)
+        with self.assertRaises(OutOfAllowance):
+            brain._complete(with_tools=True)
+
+    def test_a_real_fault_is_still_a_real_fault(self):
+        def broken(*a, **kw):
+            raise APIConnectionError(request=None)
+
+        brain = self._brain(1, broken)
+        with self.assertRaises(RuntimeError) as caught:
+            brain._complete(with_tools=True)
+        self.assertNotIsInstance(caught.exception, OutOfAllowance)
+
+    def test_he_is_told_it_is_the_limit_rather_than_a_breakage(self):
+        said = []
+        brain = SimpleNamespace(
+            history=[], think=mock.Mock(side_effect=OutOfAllowance("groq")))
+        with mock.patch.object(main, "speak",
+                               lambda text, ui=None, until=None: said.append(text)):
+            main.handle(brain, "write me a game", None, 0.0, None, None)
+        self.assertTrue(said)
+        self.assertIn("allowance", said[0].lower())
+        self.assertNotIn("went wrong", said[0].lower())
+
+    def test_the_client_does_not_sit_on_a_429(self):
+        """It used to wait out whatever retry-after the 429 carried: measured
+        at 33 seconds of silence before reo said anything at all."""
+        made = {}
+        brain = Brain.__new__(Brain)
+        brain._clients = {}
+        with mock.patch.object(brain_module, "OpenAI",
+                               lambda **kw: made.update(kw) or SimpleNamespace()):
+            brain._client(0, providers.Provider("p", "k", "https://p.invalid", "m"))
+        self.assertEqual(made.get("max_retries"), 0)
 
 
 if __name__ == "__main__":

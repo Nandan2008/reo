@@ -8,7 +8,7 @@ import webbrowser
 
 import psutil
 
-from . import pointer, system
+from . import config, pointer, system, workspace
 
 # Spoken name -> Windows command. Only these can be launched.
 APPS = {
@@ -264,6 +264,10 @@ FUNCTIONS = {
     "scroll_mouse": lambda amount=-3: pointer.scroll(amount),
     "cursor_position": lambda: pointer.where(),
     "control_system": lambda action, amount=0: system.control(action, amount),
+    "write_file": lambda name, content="": workspace.write(name, content),
+    "read_file": lambda name: workspace.read(name),
+    "list_files": lambda: workspace.listing(),
+    "open_file": lambda name: workspace.show(name),
     "remember": remember,
     "forget": forget,
     "recall": recall,
@@ -277,7 +281,7 @@ FUNCTIONS = {
     "get_battery": get_battery,
 }
 
-TOOLS = [
+EVERY_TOOL = [
     {
         "name": "open_app",
         "description": ("Open a program, or bring it forward if already running. Use this "
@@ -386,6 +390,46 @@ TOOLS = [
         },
     },
     {
+        "name": "write_file",
+        "description": ("Write a file to reo's folder: code, a script, notes, "
+                        "anything worth keeping. Pass the WHOLE contents - this "
+                        "is how you give the user code, never by saying it out "
+                        "loud. Replaces a file of the same name, keeping one "
+                        "copy of the old one."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string",
+                         "description": "e.g. 'snake.py', 'notes/ideas.md'"},
+                "content": {"type": "string", "description": "the whole file"},
+            },
+            "required": ["name", "content"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": "Read back a file from reo's folder, to change or check it.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "list_files",
+        "description": "What is in reo's folder.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "open_file",
+        "description": "Open a file from reo's folder in whatever Windows uses for it.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
+    {
         "name": "control_system",
         "description": ("The laptop itself: volume_up, volume_down, mute, play_pause, "
                         "next_track, previous_track, minimise, maximise, restore, "
@@ -491,12 +535,35 @@ TOOLS = [
 ]
 
 
+# A tool that is switched off is not described to the model at all.
+# run_command cost 111 tokens of every single request to advertise something
+# that could only ever answer "that is switched off" - and the model would
+# call it, burning a whole round trip of 1,456 tokens to be told no. A free
+# Groq minute is 8000 tokens; there is no room for that.
+NEEDS = {
+    "run_command": "ALLOW_SHELL",
+    "move_cursor": "ALLOW_MOUSE",
+    "click_mouse": "ALLOW_MOUSE",
+    "scroll_mouse": "ALLOW_MOUSE",
+    "cursor_position": "ALLOW_MOUSE",
+}
+
+
+def allowed(spec) -> bool:
+    switch = NEEDS.get(spec["name"])
+    return switch is None or bool(getattr(config, switch, False))
+
+
+TOOLS = [spec for spec in EVERY_TOOL if allowed(spec)]
+
+
 # Tools that only look things up. Several of these in one reply can run at
 # the same time; anything that presses a key or moves a window cannot, because
 # the order it happens in is the whole point.
 READ_ONLY = frozenset({
     "search_web", "look_up", "read_page", "get_datetime", "get_battery",
     "recall", "list_apps", "list_windows", "cursor_position",
+    "read_file", "list_files",
 })
 
 

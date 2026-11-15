@@ -7,7 +7,7 @@ import threading
 
 from . import config, fastpath, providers
 from .stats import session as stats
-from .brain import Brain
+from .brain import Brain, OutOfAllowance
 from .listen import Listener
 from .speak import speak
 from . import tools
@@ -91,6 +91,18 @@ def _heard_detail(heard_in: float, listener) -> str:
     return f"heard {heard_in:.1f}s (you {max(heard_in - stt, 0.0):.1f}s + stt {stt:.1f}s)"
 
 
+def _hand_back(listener) -> None:
+    """Both sound devices are held open between commands, because opening
+    them costs 373ms and 287ms and that was being paid every single time.
+    Give them back on the way out."""
+    from . import speak as voice
+    for let_go in (listener.mic.close, voice.close):
+        try:
+            let_go()
+        except Exception:
+            pass
+
+
 def _interrupt_watch(toggle):
     """Something speak() can ask whether it has been told to shut up.
 
@@ -158,6 +170,12 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
     started = time.time()
     try:
         reply = brain.think(text)
+    except OutOfAllowance as e:
+        # Not a fault: the free tier is used up for this minute. Writing code
+        # spends output tokens fast, so this is the one he will actually meet.
+        print(f"  [limit] {e}")
+        reply = ("[apologetic] I have used up my allowance for this minute. "
+                 "Give it a moment, or add a second key.")
     except Exception as e:
         print(f"  [error] {e}")
         reply = "Something went wrong reaching my brain. Please try again."
@@ -234,14 +252,13 @@ def main():
         try:
             ui.run(lambda: _loop(listener, brain, waker, toggle, combination, ui))
         finally:
-            listener.mic.close()
+            _hand_back(listener)
         return
 
     try:
         _loop(listener, brain, waker, toggle, combination, None)
     finally:
-        # The stream is held open between commands, so hand the device back.
-        listener.mic.close()
+        _hand_back(listener)
 
 
 def _loop(listener, brain, waker, toggle, combination, ui):

@@ -55,7 +55,14 @@ def _undouble(text: str) -> str:
 
 
 def _is_echo(tail: str, before: str) -> bool:
-    """Is this short last fragment just the end of the sentence before it?"""
+    """Is this short last fragment just the end of the sentence before it?
+
+    Only the short-fragment case. The model also sometimes says the same
+    thing twice in different words - "Wrote the note. The note is saved as
+    the note." - and a rule loose enough to catch that was loose enough to
+    eat a real second sentence, so that one is left alone and simply sounds
+    a bit redundant.
+    """
     words = tail.rstrip(".!?").strip().lower()
     if not words or len(words.split()) > 4:
         return False
@@ -129,24 +136,43 @@ def _speak_pyttsx3(text: str, emotion: str, until=None) -> bool:
     return cut.is_set()
 
 
+_voice_client = None
+
+
+def _client():
+    """One client for the voice, built once and kept.
+
+    It used to be built per reply. Measured on a cold one: 2.69s before a
+    single byte came back, against 0.20s once it is warm.
+    """
+    global _voice_client
+    if _voice_client is None:
+        from openai import OpenAI
+
+        from . import providers
+
+        # Orpheus is hosted by Groq alone, so the voice needs the Groq key
+        # even when the thinking has moved to another provider.
+        voice_host = providers.hosting(config.TTS_MODEL)
+        if voice_host is None:
+            raise RuntimeError("Orpheus needs a Groq key; set REO_TTS=pyttsx3 or add one.")
+        _voice_client = OpenAI(api_key=voice_host.key, base_url=voice_host.base_url,
+                               timeout=config.REQUEST_TIMEOUT, max_retries=1)
+    return _voice_client
+
+
 def _speak_orpheus(text: str, until=None) -> bool:
-    from openai import OpenAI
-
-    from . import providers
-
-    # Orpheus is hosted by Groq alone, so the voice needs the Groq key even when
-    # the thinking has moved to another provider.
-    voice_host = providers.hosting(config.TTS_MODEL)
-    if voice_host is None:
-        raise RuntimeError("Orpheus needs a Groq key; set REO_TTS=pyttsx3 or add one.")
-    client = OpenAI(api_key=voice_host.key, base_url=voice_host.base_url,
-                    timeout=config.REQUEST_TIMEOUT, max_retries=1)
+    client = _client()
+    try:
+        with client.audio.speech.with_streaming_response.create(
+                model=config.TTS_MODEL, voice=config.TTS_VOICE,
+                input=text, response_format="wav") as response:
+            return _play_arriving(response.iter_bytes(chunk_size=16384), until)
+    except _NoAudio:
+        pass            # nothing usable came back; fall through to the whole-file way
     response = client.audio.speech.create(
-        model=config.TTS_MODEL,
-        voice=config.TTS_VOICE,
-        input=text,
-        response_format="wav",
-    )
+        model=config.TTS_MODEL, voice=config.TTS_VOICE,
+        input=text, response_format="wav")
     with wave.open(io.BytesIO(response.read())) as w:
         # Groq sends a streaming header claiming 2147483647 frames, so the count
         # is meaningless; what readframes actually returns is the clip.
@@ -158,6 +184,207 @@ def _speak_orpheus(text: str, until=None) -> bool:
     else:
         audio, rate = _tighten(audio, rate)
     return _play(audio, rate, until)
+
+
+class _NoAudio(Exception):
+    """The streamed response held no usable WAV."""
+
+
+def _wav_shape(raw: bytes):
+    """Where the samples start in a WAV, and at what rate. None if the header
+    has not all arrived yet."""
+    if len(raw) < 12 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
+        return None
+    at, rate, channels, bits = 12, None, 1, 16
+    while at + 8 <= len(raw):
+        name = raw[at:at + 4]
+        size = int.from_bytes(raw[at + 4:at + 8], "little")
+        body = at + 8
+        if name == b"fmt " and body + 16 <= len(raw):
+            channels = int.from_bytes(raw[body + 2:body + 4], "little") or 1
+            rate = int.from_bytes(raw[body + 4:body + 8], "little")
+            bits = int.from_bytes(raw[body + 14:body + 16], "little") or 16
+        elif name == b"data":
+            # Groq claims 2147483647 bytes here, so the size is no use; what
+            # matters is that everything after this point is samples.
+            return (rate, channels, bits, body) if rate else None
+        at = body + size + (size & 1)
+    return None
+
+
+def _first_sound(samples) -> int:
+    """Where the speech starts, so the pause at the front is not played."""
+    if not len(samples):
+        return 0
+    peak = int(np.abs(samples).max())
+    if peak == 0:
+        return 0
+    loud = np.flatnonzero(np.abs(samples) > peak * 0.02)
+    return int(loud[0]) if len(loud) else 0
+
+
+# The speaker, opened once and left open. Opening one costs 287ms on this
+# laptop - measured - and that was paid on every single reply, by sd.play()
+# as much as by anything else. Starting an already-open stream costs nothing.
+# It plays silence between clips, which is what a sound card does anyway.
+_out = None
+_out_rate = None
+_clip = {"audio": np.zeros(0, dtype=np.int16), "at": 0, "end": 0, "final": True}
+_clip_lock = threading.Lock()
+_clip_over = threading.Event()
+
+
+def _feed(out, frames, moment, status):
+    """Hand the card whatever is ready. Never raises CallbackStop: the stream
+    outlives the clip, so it fills with silence and waits for the next one."""
+    with _clip_lock:
+        audio, at, end = _clip["audio"], _clip["at"], _clip["end"]
+        take = max(0, min(frames, end - at))
+        _clip["at"] = at + take
+        over = _clip["final"] and _clip["at"] >= end
+        block = audio[at:at + take]
+    if take:
+        out[:take, 0] = block
+    if take < frames:
+        out[take:, 0] = 0
+    if over:
+        _clip_over.set()
+
+
+def _speaker(rate: int):
+    """The open stream, at this rate. Rebuilt only if the rate changes."""
+    global _out, _out_rate
+    if _out is not None and _out_rate == rate and _out.active:
+        return _out
+    close()
+    _out = sd.OutputStream(samplerate=rate, channels=1, dtype="int16",
+                           callback=_feed)
+    _out_rate = rate
+    _out.start()
+    return _out
+
+
+def close() -> None:
+    """Hand the sound card back."""
+    global _out, _out_rate
+    stream, _out, _out_rate = _out, None, None
+    if stream is None:
+        return
+    try:
+        stream.stop()
+        stream.close()
+    except Exception:
+        pass
+
+
+def _begin(audio, rate: int, final: bool) -> None:
+    _clip_over.clear()
+    with _clip_lock:
+        _clip["audio"] = audio
+        _clip["at"] = _first_sound(audio) if final else 0
+        _clip["end"] = len(audio)
+        _clip["final"] = final
+    _speaker(rate)
+
+
+def _wait(seconds: float, until=None) -> bool:
+    """Until it has finished, or he cuts in. True if he cut in."""
+    deadline = time.monotonic() + seconds * 2 + PLAY_GRACE
+    while not _clip_over.wait(0.04):
+        if until is not None and until():
+            with _clip_lock:
+                _clip["end"] = _clip["at"]          # stop where it got to
+                _clip["final"] = True
+            return True
+        if time.monotonic() > deadline:
+            with _clip_lock:
+                _clip["end"] = _clip["at"]
+                _clip["final"] = True
+            print(f"  [voice] playback did not finish in {seconds + PLAY_GRACE:.0f}s; "
+                  "moving on.")
+            return False
+    return False
+
+
+def _play_arriving(chunks, until=None) -> bool:
+    """Speak from a buffer that is still filling.
+
+    Measured: the first bytes arrive 0.20s in and the last at 0.74s, so two
+    thirds of the wait was the transfer rather than groq thinking. The clip
+    comes down about eight times faster than it plays, so once a fifth of a
+    second is in hand the rest will always keep up.
+
+    The silence on the end still gets trimmed. The download is long finished
+    before playback reaches the end, so the end can simply be moved in once
+    the last chunk has landed.
+    """
+    raw = bytearray()
+    shape = None
+    for chunk in chunks:
+        raw.extend(chunk)
+        shape = _wav_shape(raw)
+        if shape:
+            break
+    if not shape:
+        raise _NoAudio
+    rate, channels, bits, start = shape
+    if bits != 16 or channels != 1:
+        raise _NoAudio                  # the whole-file path can cope; this cannot
+
+    spare = bytearray(raw[start:])
+    held = {"audio": np.zeros(0, dtype=np.int16)}
+
+    def absorb():
+        whole = len(spare) // 2 * 2
+        if not whole:
+            return
+        block = np.frombuffer(bytes(spare[:whole]), dtype=np.int16)
+        del spare[:whole]
+        held["audio"] = np.concatenate([held["audio"], block])
+
+    absorb()
+    enough = int(rate * 0.2)
+    for chunk in chunks:
+        spare.extend(chunk)
+        absorb()
+        if len(held["audio"]) >= enough:
+            break
+    if not len(held["audio"]):
+        raise _NoAudio
+
+    # Claiming a higher sample rate plays it faster, with no resampling cost.
+    speed = max(8000, int(rate * config.SPEECH_SPEED))
+    _begin(held["audio"], speed, final=False)
+    with _clip_lock:
+        _clip["at"] = _first_sound(held["audio"])   # skip the pause at the front
+
+    def rest():
+        try:
+            for chunk in chunks:
+                spare.extend(chunk)
+                absorb()
+                with _clip_lock:
+                    _clip["audio"] = held["audio"]
+                    _clip["end"] = len(held["audio"])
+        except Exception as e:
+            print(f"  [voice] the rest of the clip did not arrive ({e})")
+        whole = held["audio"]
+        tail = len(whole)
+        if tail:
+            peak = int(np.abs(whole).max())
+            if peak:
+                loud = np.flatnonzero(np.abs(whole) > peak * 0.02)
+                if len(loud):
+                    tail = min(tail, int(loud[-1]) + int(rate * 0.05))
+        with _clip_lock:
+            _clip["audio"] = whole
+            _clip["end"] = tail
+            _clip["final"] = True
+            if _clip["at"] >= tail:
+                _clip_over.set()
+
+    threading.Thread(target=rest, daemon=True, name="voice").start()
+    return _wait(len(held["audio"]) / rate + 30, until)
 
 
 def _tighten(audio, rate):
@@ -184,28 +411,17 @@ def _tighten(audio, rate):
 
 
 def _play(audio, rate, until=None) -> bool:
-    """Play it, but never wait forever.
+    """Play a clip that is already in hand, through the same kept speaker.
 
-    sd.wait() blocks with no timeout. When something else holds the sound device
-    - a second copy of reo, say - it never returns, and reo looks frozen. One
-    measured hang ran to 72,304 seconds.
+    sd.play() opens the device itself, which is the 287ms this avoids, and
+    sd.wait() blocks with no timeout at all - when something else held the
+    sound card it never returned, and reo looked frozen. One measured hang
+    ran to 72,304 seconds.
     """
-    expected = len(audio) / rate
-    sd.play(audio, rate)
-    # Generous: under load the clip really can take longer than its own
-    # length, and cutting a reply off mid-word is worse than waiting.
-    deadline = time.monotonic() + expected * 2 + PLAY_GRACE
-    while time.monotonic() < deadline:
-        if until is not None and until():
-            sd.stop()
-            return True
-        stream = sd.get_stream()
-        if stream is None or not stream.active:
-            return False
-        time.sleep(0.05)
-    sd.stop()
-    print(f"  [voice] playback did not finish in {expected + PLAY_GRACE:.0f}s; moving on.")
-    return False
+    if getattr(audio, "ndim", 1) > 1:       # stereo: rare, and not worth a path
+        audio = audio.mean(axis=1).astype(np.int16)
+    _begin(np.ascontiguousarray(audio, dtype=np.int16), rate, final=True)
+    return _wait(len(audio) / rate, until)
 
 
 def speak(text: str, ui=None, until=None) -> bool:

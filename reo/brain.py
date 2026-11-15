@@ -33,7 +33,12 @@ SYSTEM = (
     "the query, and read_page a result when the snippets fall short. Use look_up "
     "for facts that do not change. "
     "Call remember when the user tells you something about themselves worth "
-    "knowing next time; do not announce that you did."
+    "knowing next time; do not announce that you did. "
+    "You can write files. Asked for code, a script, a list or anything else "
+    "worth keeping, put the whole of it in write_file and then say one short "
+    "sentence about what you wrote. Never read code or a long text aloud: "
+    "write it down and say where it is. Use read_file before changing "
+    "something you wrote earlier, and open_file when he wants to see it."
 )
 
 # Every tool reo can actually run. A name outside this set must never enter
@@ -49,6 +54,17 @@ OPENAI_TOOLS = [
 ]
 
 
+class OutOfAllowance(RuntimeError):
+    """Every key has hit its per-minute limit.
+
+    Worth its own name because it is the one failure that is not a fault:
+    nothing is broken, the free tier is simply used up for the next minute.
+    Writing code makes it far more likely - a program is two thousand output
+    tokens against an eight thousand token minute - and "something went wrong
+    reaching my brain" sends him looking for a problem that is not there.
+    """
+
+
 class Brain:
     def __init__(self, pool=None):
         self.pool = providers.pool() if pool is None else pool
@@ -62,8 +78,13 @@ class Brain:
         transcribed a question once and then simply never spoke again.
         """
         if index not in self._clients:
+            # max_retries=0 on purpose. The client waits out whatever
+            # retry-after a 429 carries, which measured at 33 seconds of
+            # silence before reo said anything at all. The pool below is the
+            # retry layer: another key answers at once, and with no other key
+            # there is nothing to wait for that saying so would not do better.
             self._clients[index] = OpenAI(api_key=provider.key, base_url=provider.base_url,
-                                          timeout=config.REQUEST_TIMEOUT, max_retries=1)
+                                          timeout=config.REQUEST_TIMEOUT, max_retries=0)
         return self._clients[index]
 
     def _ask(self, provider, client, with_tools: bool):
@@ -77,7 +98,7 @@ class Brain:
             model=provider.model,
             messages=[{"role": "system",
                        "content": f"{SYSTEM} Today is {today}.{known}"}] + self.history,
-            max_tokens=500,
+            max_tokens=config.MAX_REPLY_TOKENS,
             temperature=0.3,
         )
         if with_tools:
@@ -130,13 +151,14 @@ class Brain:
         """
         if not len(self.pool):
             raise RuntimeError("No model key configured: add one to .env.")
-        failures = []
+        failures, limited = [], 0
         for _ in range(len(self.pool)):
             index, provider = self.pool.current()
             try:
                 return self._ask(provider, self._client(index, provider), with_tools)
             except (RateLimitError, APIConnectionError, APITimeoutError) as e:
                 self.pool.bench(index)
+                limited += isinstance(e, RateLimitError)
                 failures.append(f"{provider.name}: {type(e).__name__}")
             except APIStatusError as e:
                 # 4xx other than 429 is our own mistake and will fail the same
@@ -148,6 +170,8 @@ class Brain:
             spare = self.pool.current()
             if spare is not None and not self.pool.benched(spare[0]):
                 print(f"  [brain] {provider.name} unavailable; trying {spare[1].name}")
+        if limited and limited == len(failures):
+            raise OutOfAllowance(", ".join(failures))
         raise RuntimeError("Every model key refused: " + ", ".join(failures))
 
     def think(self, text: str) -> str:

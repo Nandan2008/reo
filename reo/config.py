@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -8,6 +10,11 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 # Anything slower than this is a stall, not an answer.
 REQUEST_TIMEOUT = float(os.getenv("REO_REQUEST_TIMEOUT", "25"))
+# Room for an answer. 500 was fine while every reply was one spoken sentence,
+# but a program is not one spoken sentence, and reo would stop in the middle
+# of writing one. It is a ceiling, not a target: a reply that does not need
+# the room does not spend it.
+MAX_REPLY_TOKENS = int(os.getenv("REO_MAX_REPLY_TOKENS", "2600"))
 # How hard a reasoning model should think before a one-sentence answer.
 # "low", "medium", "high", or blank to leave it to the model.
 REASONING_EFFORT = os.getenv("REO_REASONING", "low").strip()
@@ -110,6 +117,13 @@ ALLOW_SHELL = os.getenv("REO_ALLOW_SHELL", "0") not in ("0", "false", "no")
 # only click where it is told - coordinates you give it, or ones a tool
 # reported back. It is told never to guess.
 ALLOW_MOUSE = os.getenv("REO_ALLOW_MOUSE", "1") not in ("0", "false", "no")
+# The one folder reo may write into. On the Desktop on purpose: a file he
+# cannot find is the same as no file. Everything reo writes lands here, and
+# a name that would land anywhere else is refused rather than tidied up.
+WORKSPACE = os.getenv(
+    "REO_WORKSPACE", str(Path.home() / "OneDrive" / "Desktop" / "reo-work"))
+if not Path(WORKSPACE).parent.exists():      # no OneDrive on this machine
+    WORKSPACE = str(Path.home() / "Desktop" / "reo-work")
 # pynput spelling: <ctrl> <alt> <shift> <cmd> plus a letter.
 HOTKEY = os.getenv("REO_HOTKEY", "<ctrl>+<alt>+r")
 # Wake detection: "phrase" uses a model trained on the wake word itself and is
