@@ -173,6 +173,23 @@ def look_up(topic: str) -> str:
     return f"{page.get('title', topic)}: {page['extract']}"
 
 
+def answer_about_yourself(answer: str) -> str:
+    """What reo should say when asked who or what it is.
+
+    He said, in his own words, "from now on if anyone asks who are you you
+    should tell you are Nandan's baby", and reo had no way to obey him: the
+    identity questions are answered from about.py, which until now only knew
+    what the code knew. Stored in the shape about.py reads, so it is said
+    every time, in the same words, without the model being asked again.
+    """
+    from .memory import memory
+
+    answer = " ".join(str(answer).split()).rstrip(".")
+    if not answer:
+        return "Nothing to say about yourself."
+    return memory.remember(f"{config.WAKE_NAME.capitalize()} says: {answer}")
+
+
 def remember(fact: str) -> str:
     from .memory import memory
     return memory.remember(fact)
@@ -285,6 +302,7 @@ FUNCTIONS = {
     "list_files": lambda: workspace.listing(),
     "open_file": lambda name: workspace.show(name),
     "remember": remember,
+    "answer_about_yourself": answer_about_yourself,
     "forget": forget,
     "recall": recall,
     "past_chats": lambda about: chats.search(about),
@@ -507,6 +525,20 @@ EVERY_TOOL = [
             "type": "object",
             "properties": {"topic": {"type": "string"}},
             "required": ["topic"],
+        },
+    },
+    {
+        "name": "answer_about_yourself",
+        "description": ("He has told you how to answer when someone asks who "
+                        "or what you are. Store that answer here, written in "
+                        "the first person, and it is what you will say from "
+                        "then on - \"I am Nandan's baby\"."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"answer": {
+                "type": "string",
+                "description": "The answer, in the first person"}},
+            "required": ["answer"],
         },
     },
     {

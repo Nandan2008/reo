@@ -186,16 +186,23 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-That runs both suites: 264 tests, no API key needed.
+That runs both suites: 376 tests, no API key needed.
 
-`tests/test_reo.py` is the fast one - 253 tests, no microphone, no model. It
+`tests/test_reo.py` is the fast one - 364 tests, no microphone, no model. It
 covers the things that actually broke: exit phrases with punctuation inside
 them, noise transcriptions, emotion tags and repeated answers, tool failures,
 history trimming keeping tool calls paired, contractions reaching the fast
 path, sticky language detection, names that would write a file outside reo's
-folder, and falling over to a second key.
+folder, and falling over to a second key, an offer of further help being cut off
+the end of a reply while a real question is not, and a written program
+not being kept in the conversation.
 
-`tests/test_voice.py` is the slow one, and the one that matters most. Eleven
+The suite writes to a temp folder, deliberately and for the whole run. It
+drives the main loop, and the main loop records every exchange and lets
+the model remember things - which went into the real `chats.jsonl` and
+`memory.json` until someone noticed "write me a game" in there twice.
+
+`tests/test_voice.py` is the slow one, and the one that matters most. Twelve
 tests that put six seconds of real recorded speech in through a stand-in sound
 card, through the real voice detector and the real speech model, and check what
 comes out: he speaks straight away, he takes three seconds to begin, something
@@ -284,6 +291,55 @@ config, the words that actually stop it from the list that actually stops it,
 the model from whichever one last answered - so they cannot drift from the
 code, and they still work when the allowance is spent, which is exactly when
 someone is most likely to be asking what is going on.
+
+### Telling it what to say about itself
+
+Say **"from now on, if anyone asks who you are, tell them you are Nandan's
+baby"** and that is what it says, every time, in those words. It goes into
+`memory.json` as `Reo says: I am Nandan's baby` and the identity questions
+read it from there - "who are you", "whose baby are you", "are you my baby".
+
+This exists because it was asked for and did not work. The instruction was
+given, reo said "got it", and then answered "whose baby are you" eight times
+with eight different answers, because those questions are answered from the
+code and the code had never heard of it.
+
+Asking the model to store it in the right shape was tried first and is not
+reliable - it wrote `If anyone asks who are you, say you are Nandan's baby`
+one run and `When asked who I am, I should say I am Nandan's baby.` the next.
+It gets a tool of its own instead, which it picks correctly because the
+tool's description is the request. Phrasings that still arrive through
+`remember` are reshaped on the way in.
+
+Who built it is not up for negotiation. That one is "you did", whatever is
+in memory, because it said OpenAI three times running and kept saying it
+after being corrected.
+
+## When it runs out of allowance
+
+The free tier is 8000 tokens a minute, and one command costs 1620 tokens
+before you have said anything - 469 for the prompt and what it remembers,
+1151 for the list of the 27 things it can do. A command that uses a tool
+costs that twice. So the minute holds two or three commands, and asking for
+a program - which is two thousand output tokens on its own - can spend it in
+one go.
+
+When that happens reo says how long: *"My allowance is spent for another
+forty seconds."* It used to say "give it a moment", and a moment is not
+seven minutes. Then say **"try again"** and it asks the question again - he
+asked for a game twice, word for word, because the first attempt spent the
+allowance and took the question with it.
+
+Three things keep it out of the way:
+
+- A second key, or the local model, answers while the first is benched.
+  `qwen2.5` on this laptop is never rate limited, only slower.
+- A program reo writes is not kept in the conversation afterwards. The whole
+  file used to sit in the history and be resent on every request for the
+  next four turns, so writing a game made the next four questions fail too.
+  The file is written in full; what is kept is a note of its length.
+- Once reo has been told to stop fetching, the list of tools is left out of
+  the request, which is 1151 tokens it cannot use anyway.
 
 ## Taking it back
 
@@ -390,6 +446,26 @@ start over.
 
 What it still cannot do: see your screen or your email.
 
+## Keeping it short
+
+Spoken, a sentence costs about two and a half seconds, and speaking is the
+most expensive part of an exchange. Reo's own prompt says "no offers of
+further help" and reo made them anyway, in 13% of the replies in the log:
+*"Google is now open in your browser. Let me know if you need anything
+else."* *"This phrase is from the song by The Foundations. Would you like
+more information about the song or the artist?"*
+
+That last sentence is cut off before it is spoken. Measured by synthesising
+both versions and comparing the audio: 2.5 seconds a reply, 52 seconds
+across one session.
+
+A real question is never cut. "Should I overwrite it?", "Celsius or
+Fahrenheit?", "Which file did you mean?" - those are reo doing its job, and
+there is a test holding each of them. An offer that is the *whole* reply is
+left alone too, because saying something useless beats saying nothing. And
+the warmth stays: trimming "Sure thing," off the front was tried, saved a
+third of a second, and turned "Sure thing, digital son" into "Digital son".
+
 ## Try saying
 - "Who is the prime minister of India?"
 - "Explain quantum entanglement simply"
@@ -398,6 +474,8 @@ What it still cannot do: see your screen or your email.
 - "How's my battery?"
 - "Open YouTube"
 - "Search for best Python books"
+- "From now on, if anyone asks who you are, tell them you are my baby"
+- "Try again"
 
 ## What was taken from where
 

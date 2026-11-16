@@ -27,13 +27,28 @@ def _who_built_it() -> str:
             "folder, and you can change any of it.")
 
 
+def _told_to_say() -> str:
+    """Whatever he has told reo to say about itself. Empty if he has not."""
+    from .memory import memory
+    said = [s.rstrip(".") for s in memory.about_reo() if s.strip()]
+    return " ".join(s + "." for s in said)
+
+
+def _told_only():
+    """For questions only he can have given reo an answer to - "whose baby
+    are you" and the like. None when he has not, so the model gets it."""
+    return _told_to_say() or None
+
+
 def _what_it_is() -> str:
     from .hotkey import describe
     how = {"hotkey": f"press {describe()}",
            "wake": "say the wake word",
            "push": "press Enter in my window"}.get(config.MODE, "press the key")
-    return (f"I am Reo, a voice assistant running on this laptop. To talk to "
-            f"me, {how}.")
+    # What he told reo to say comes first, because he asked for it and the
+    # rest he already knows.
+    return (f"{_told_to_say()} I am Reo, a voice assistant running on this "
+            f"laptop. To talk to me, {how}.").strip()
 
 
 def _what_it_can_do() -> str:
@@ -65,6 +80,7 @@ ABOUT = [
     (r"(who|what) (made|created|built|wrote|designed) you"
      r"|who( is|s) your (maker|creator|developer)"
      r"|(who|what) are you (made|created|built) by", _who_built_it),
+    (r"whose \w+ (are|r) you|whos \w+ are you|are you (my|mine)( \w+)?", _told_only),
     (r"(who|what) are you|what are you called|whats your name"
      r"|introduce yourself|tell me about yourself", _what_it_is),
     (r"(what|which) (can|could) you do|what are you (able to do|capable of)"

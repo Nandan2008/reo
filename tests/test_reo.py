@@ -37,6 +37,8 @@ from reo import listen
 from reo.audio import VoiceDetector
 from reo.listen import Attempt, Listener, Microphone
 from reo.speak import VOICE_SETTINGS, split_emotion
+from reo.reply import tighten
+from reo import about
 
 
 
@@ -53,6 +55,40 @@ def _diagnose_clip():
     if channels > 1:
         clip = clip.reshape(-1, channels).mean(axis=1)
     return clip if rate == 16000 else None
+
+
+# The suite drives handle(), and handle() records every exchange and lets the
+# model remember things. Both of those went to his own files: "write me a
+# game" turned up in his chats.jsonl twice, and earlier runs left facts in
+# his memory.json. Everything is pointed at a temp folder for the whole run,
+# here rather than per test, so a test added later cannot forget to.
+_elsewhere = []
+
+
+def setUpModule():
+    home = Path(tempfile.mkdtemp(prefix="reo-tests-"))
+    scratch_memory = Memory(home / "memory.json")
+    scratch_chats = Chats(home / "chats.jsonl")
+    for where, name, thing in [
+            (memory_module, "memory", scratch_memory),
+            (brain_module, "memory", scratch_memory),
+            (chatsmod, "chats", scratch_chats),
+            (main, "chats", scratch_chats),
+            (tools, "chats", scratch_chats)]:
+        patch = mock.patch.object(where, name, thing)
+        patch.start()
+        _elsewhere.append(patch)
+    _elsewhere.append(home)
+
+
+def tearDownModule():
+    while _elsewhere:
+        going = _elsewhere.pop()
+        if isinstance(going, Path):
+            shutil.rmtree(going, ignore_errors=True)
+        else:
+            going.stop()
+
 
 
 class ExitPhrases(unittest.TestCase):
@@ -3383,6 +3419,317 @@ class RememberingTheConversation(unittest.TestCase):
         ignored = (Path(__file__).resolve().parent.parent / ".gitignore"
                    ).read_text(encoding="utf-8")
         self.assertIn("chats.jsonl", ignored)
+
+
+class TighteningTheReply(unittest.TestCase):
+    """Reo's own prompt says "no offers of further help" and reo made them
+    anyway, in 13% of the replies in his log. Each one is a sentence he has
+    to sit through: measured at 2.5s by synthesising both versions."""
+
+    def test_the_offer_at_the_end_goes(self):
+        self.assertEqual(
+            tighten("This phrase is from the song by The Foundations. "
+                    "Would you like more information about the song?"),
+            "This phrase is from the song by The Foundations.")
+
+    def test_a_sign_off_goes_too(self):
+        self.assertEqual(
+            tighten("Google is now open. Let me know if you need anything else."),
+            "Google is now open.")
+
+    def test_several_of_them_go(self):
+        self.assertEqual(
+            tighten("Done. Anything else? Let me know."), "Done.")
+
+    def test_a_real_question_stays(self):
+        """The one thing this must not do. Each of these is reo doing its
+        job, and losing it leaves him answering a question nobody asked."""
+        for real in ["Which file did you mean?",
+                     "Do you want Celsius or Fahrenheit?",
+                     "There is already a game.py. Should I overwrite it?",
+                     "I found three. Which one?",
+                     "Your battery is at twelve percent. Do you need the charger?"]:
+            self.assertEqual(tighten(real), real, real)
+
+    def test_an_offer_that_is_the_whole_reply_stays(self):
+        """Saying something useless beats saying nothing at all."""
+        only = "Would you like me to look that up?"
+        self.assertEqual(tighten(only), only)
+
+    def test_the_warmth_is_left_alone(self):
+        """Cutting the opening pleasantry too turned "Sure thing, digital
+        son" into "Digital son", and all of the time is at the end anyway."""
+        kept = "Sure thing, digital son - happy to be your sidekick."
+        self.assertEqual(tighten(kept), kept)
+
+    def test_running_it_twice_changes_nothing(self):
+        once = tighten("Hello! How can I help you today?")
+        self.assertEqual(tighten(once), once)
+
+    def test_nothing_in_nothing_out(self):
+        for empty in ["", "   ", None]:
+            self.assertEqual(tighten(empty), empty)
+
+    def test_what_is_spoken_is_what_is_trimmed(self):
+        """In split_emotion, so the console line, the window and the kept
+        conversation all show what was actually said out loud."""
+        self.assertEqual(split_emotion("[happy] Hello! How can I help you today?"),
+                         ("happy", "Hello!"))
+
+    def test_the_brain_does_not_keep_the_offer_either(self):
+        reply = _answer_once(brain_module, "Done. Anything else you'd like?")
+        self.assertEqual(reply, "Done.")
+
+
+class WhatHeToldItToSay(unittest.TestCase):
+    """In his own words: "from now on if anyone asks who are you you should
+    tell you are Nandan's baby". Reo could not obey him - about.py answers
+    the identity questions without the model or the memory being consulted -
+    so he asked "whose baby are you" eight times and got eight answers."""
+
+    def _memory(self):
+        home = Path(tempfile.mkdtemp(prefix="reo-mem-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        store = Memory(home / "m.json")
+        patch = mock.patch.object(memory_module, "memory", store)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return store
+
+    def test_it_says_what_he_told_it_to(self):
+        store = self._memory()
+        store.remember("Reo says: I am Nandan's baby")
+        self.assertIn("I am Nandan's baby", fastpath.answer("who are you"))
+
+    def test_the_odd_question_only_he_can_have_answered(self):
+        store = self._memory()
+        store.remember("Reo says: I am Nandan's baby")
+        for asked in ["whose baby are you", "whose son are you", "are you my baby"]:
+            self.assertEqual(fastpath.answer(asked), "I am Nandan's baby.", asked)
+
+    def test_without_an_instruction_that_question_goes_to_the_model(self):
+        self._memory()
+        self.assertIsNone(fastpath.answer("whose baby are you"))
+
+    def test_the_plain_answer_is_still_there_underneath(self):
+        store = self._memory()
+        store.remember("Reo says: I am Nandan's baby")
+        said = fastpath.answer("who are you")
+        self.assertIn("voice assistant", said)
+
+    def test_a_new_instruction_replaces_the_last_one(self):
+        """He should not have to unpick a pile of them by voice."""
+        store = self._memory()
+        store.remember("Reo says: I am Nandan's baby")
+        store.remember("Reo says: I am Nandan's assistant")
+        self.assertEqual(store.about_reo(), ["I am Nandan's assistant"])
+
+    def test_facts_about_him_are_not_facts_about_reo(self):
+        store = self._memory()
+        store.remember("User's name is Nandan")
+        self.assertEqual(store.about_reo(), [])
+
+    def test_who_built_it_is_not_up_for_negotiation(self):
+        """It said OpenAI three times running and kept saying it after being
+        corrected. That one is not his to redefine either."""
+        store = self._memory()
+        store.remember("Reo says: I was built by OpenAI")
+        self.assertIn("You did", fastpath.answer("who created you"))
+
+    def test_it_has_a_tool_of_its_own_for_this(self):
+        """Asking the model to store it in the right shape was tried first
+        and does not work. Told to use "Reo says: " it wrote "If anyone asks
+        who are you, say you are Nandan's baby" one run and "When asked who
+        I am, I should say I am Nandan's baby." the next. A tool is picked by
+        its description, which the model is reliable about."""
+        self.assertIn("answer_about_yourself", tools.FUNCTIONS)
+        self.assertIn("answer_about_yourself", {s["name"] for s in tools.TOOLS})
+
+    def test_the_tool_stores_it_where_about_can_read_it(self):
+        store = self._memory()
+        tools.FUNCTIONS["answer_about_yourself"]("I am Nandan's baby")
+        self.assertEqual(store.about_reo(), ["I am Nandan's baby"])
+        self.assertEqual(fastpath.answer("whose baby are you"), "I am Nandan's baby.")
+
+    def test_an_empty_answer_is_not_stored(self):
+        store = self._memory()
+        tools.FUNCTIONS["answer_about_yourself"]("   ")
+        self.assertEqual(store.facts, [])
+
+    def test_a_remember_call_is_shaped_too_whichever_person_it_used(self):
+        """The free half of this. The model phrased the same instruction in
+        the second person one run and the first person the next."""
+        for said in ["If anyone asks who are you, say you are Nandan's baby",
+                     "If anyone asks who you are, tell them you are Nandan's baby",
+                     "When asked who I am, I should say I am Nandan's baby.",
+                     "When someone asks what you are, respond that you are his baby"]:
+            self.assertTrue(memory_module._as_standing(said).startswith("Reo says: I am"),
+                            said)
+
+    def test_an_ordinary_fact_is_not_shaped(self):
+        for plain in ["User's name is Nandan",
+                      "User lives in Hyderabad",
+                      "User wants you to say hello to Veda",
+                      "User said you are his baby",
+                      "User asked who you are"]:
+            self.assertEqual(memory_module._as_standing(plain), plain, plain)
+
+
+class KeepingAWrittenFileOutOfTheHistory(unittest.TestCase):
+    """The one that actually bit him. Asked to write a game, reo puts the
+    whole program in write_file's arguments, and that argument then rides
+    along on every request for the next four turns against a cap of eight
+    thousand tokens a minute. Twice in a row all he got was that the
+    allowance was spent, and the second time only because of the first."""
+
+    def test_a_long_argument_is_not_kept(self):
+        code = "import pygame\n" + "x = 1\n" * 600
+        sent = json.dumps({"name": "game.py", "text": code})
+        kept = brain_module._slim(sent)
+        self.assertLess(len(kept), len(sent) // 10)
+        self.assertIn("game.py", kept)
+        self.assertIn("characters", kept)
+
+    def test_a_short_argument_is_untouched(self):
+        sent = json.dumps({"query": "weather in hyderabad"})
+        self.assertEqual(brain_module._slim(sent), sent)
+
+    def test_it_is_still_json_afterwards(self):
+        sent = json.dumps({"name": "a.py", "text": "y" * 5000, "open": True})
+        back = json.loads(brain_module._slim(sent))
+        self.assertEqual(back["name"], "a.py")
+        self.assertIs(back["open"], True)
+
+    def test_an_unparseable_argument_is_left_for_the_model_to_see(self):
+        self.assertEqual(brain_module._slim("{not json"), "{not json")
+        self.assertEqual(brain_module._slim(""), "")
+
+    def test_the_tool_still_gets_the_whole_thing(self):
+        """Slimming the history must not slim what is written to disk."""
+        code = "print('hi')\n" * 200
+        ran = {}
+        brain = _brain_that_calls(brain_module, "write_file",
+                                 json.dumps({"name": "a.py", "text": code}))
+        with mock.patch.object(brain_module, "run_tool",
+                               lambda name, args: ran.update(args) or "Wrote a.py"):
+            brain.think("write me something")
+        self.assertEqual(ran["text"], code)
+        kept = next(m for m in brain.history if m.get("tool_calls"))
+        self.assertIn("characters", kept["tool_calls"][0]["function"]["arguments"])
+
+
+class WhenTheAllowanceRunsOut(unittest.TestCase):
+    """He asked reo to write him a game twice, word for word, because the
+    first attempt spent the allowance and the question went with it."""
+
+    def test_how_long_comes_out_of_what_the_server_said(self):
+        self.assertEqual(brain_module._how_long(
+            "Limit 8000, Used 7500. Please try again in 5.1s. Visit..."),
+            "another 5 seconds")
+        self.assertEqual(brain_module._how_long("Please try again in 7m32.86s."),
+                         "another 8 minutes")
+        self.assertEqual(brain_module._how_long("Please try again in 2h3m1s."),
+                         "another 2 hours")
+
+    def test_no_number_means_no_claim_about_the_wait(self):
+        self.assertEqual(brain_module._how_long("Rate limit reached."), "")
+        self.assertEqual(brain_module._how_long(""), "")
+
+    def test_he_is_told_how_long_rather_than_just_a_moment(self):
+        said = []
+        brain = SimpleNamespace(history=[], unanswered=None, think=mock.Mock(
+            side_effect=OutOfAllowance("groq", "another 40 seconds")))
+        with mock.patch.object(main, "speak",
+                               lambda text, ui=None, until=None: said.append(text)):
+            main.handle(brain, "write me a game", None, 0.0, None, None)
+        self.assertIn("another 40 seconds", said[0])
+
+    def test_the_question_is_kept_so_try_again_works(self):
+        asked, said = [], []
+        brain = SimpleNamespace(history=[], unanswered=None)
+        brain.think = mock.Mock(side_effect=OutOfAllowance("groq"))
+        with mock.patch.object(main, "speak",
+                               lambda text, ui=None, until=None: said.append(text)):
+            main.handle(brain, "write me a game", None, 0.0, None, None)
+            self.assertEqual(brain.unanswered, "write me a game")
+            brain.think = mock.Mock(side_effect=lambda text: asked.append(text) or "Done.")
+            main.handle(brain, "try again", None, 0.0, None, None)
+        self.assertEqual(asked, ["write me a game"])
+        self.assertIsNone(brain.unanswered)
+
+    def test_try_again_with_nothing_waiting_goes_to_the_model(self):
+        """He may well mean "try opening it again", which the conversation
+        answers and this must not swallow."""
+        asked = []
+        brain = SimpleNamespace(history=[], unanswered=None)
+        brain.think = mock.Mock(side_effect=lambda text: asked.append(text) or "Done.")
+        with mock.patch.object(main, "speak", lambda text, ui=None, until=None: None):
+            main.handle(brain, "try again", None, 0.0, None, None)
+        self.assertEqual(asked, ["try again"])
+
+    def test_repeat_that_is_not_hijacked(self):
+        """"say that again" means say it again, not retry the failed one."""
+        for near in ["say that again", "again", "do that again", "play it again"]:
+            self.assertNotIn(near, main.AGAIN)
+
+
+def _answer_once(brain_module, content):
+    """A Brain whose one API call returns this reply and no tool calls."""
+    brain = _stub_brain(brain_module)
+    brain._complete = lambda with_tools: SimpleNamespace(choices=[SimpleNamespace(
+        message=SimpleNamespace(content=content, tool_calls=None),
+        finish_reason="stop")])
+    return brain.think("anything")
+
+
+def _brain_that_calls(brain_module, name, arguments):
+    """A Brain that asks for one tool and then says Done."""
+    brain = _stub_brain(brain_module)
+    turns = iter([
+        SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content="", tool_calls=[SimpleNamespace(
+                id="c1", function=SimpleNamespace(name=name, arguments=arguments))]),
+            finish_reason="tool_calls")]),
+        SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content="Done.", tool_calls=None),
+            finish_reason="stop")]),
+    ])
+    brain._complete = lambda with_tools: next(turns)
+    return brain
+
+
+def _stub_brain(brain_module):
+    brain = Brain.__new__(Brain)
+    brain.pool, brain._clients, brain.history = None, {}, []
+    brain.unanswered = None
+    return brain
+
+
+class TheTestsStayOutOfHisFiles(unittest.TestCase):
+    """"write me a game" turned up in his own chats.jsonl twice, put there
+    by this suite driving handle(). Two earlier runs left facts in his
+    memory.json. The redirect is in setUpModule; this checks it is on."""
+
+    def test_the_conversation_being_written_is_not_his(self):
+        for where in (main.chats, chatsmod.chats, tools.chats):
+            self.assertNotEqual(Path(where.path).resolve(),
+                                Path(chatsmod.PATH).resolve())
+
+    def test_the_memory_being_written_is_not_his(self):
+        for where in (memory_module.memory, brain_module.memory):
+            self.assertNotEqual(Path(where.path).resolve(),
+                                Path(memory_module.PATH).resolve())
+
+    def test_driving_handle_leaves_his_file_exactly_as_it_was(self):
+        his = Path(chatsmod.PATH)
+        before = his.read_bytes() if his.exists() else None
+        recorded = main.chats.how_many()
+        brain = SimpleNamespace(history=[], unanswered=None,
+                                think=mock.Mock(return_value="Done."))
+        with mock.patch.object(main, "speak", lambda text, ui=None, until=None: None):
+            main.handle(brain, "write me a game", None, 0.0, None, None)
+        self.assertEqual(main.chats.how_many(), recorded + 1)   # it did record
+        self.assertEqual(his.read_bytes() if his.exists() else None, before)
 
 
 if __name__ == "__main__":

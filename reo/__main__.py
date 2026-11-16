@@ -14,6 +14,14 @@ from .speak import speak
 from . import tools
 from .text import is_speech, normalize
 
+# Whatever went unanswered - the allowance ran out, the network went - is
+# kept, so he can say this instead of repeating himself.
+# A bare "again", "say that again" and "do that again" are deliberately not
+# here: those mean repeat what you just said, or do that action once more,
+# and hijacking them would be worse than the problem.
+AGAIN = {"try again", "try that again", "try it again", "ask that again",
+         "ask it again", "retry", "have another go", "try once more"}
+
 EXIT_PHRASES = {"goodbye", "bye", "exit", "quit", "stop listening", "goodbye reo", "bye reo"}
 
 # Asked this, reo reports on the recording he has just made rather than on the
@@ -158,6 +166,15 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
     # wants should not be read out first.
     cut_in = _interrupt_watch(toggle)
 
+    # "Try again" rather than saying the whole thing over. He asked reo to
+    # write him a game twice in a row, word for word, because the first
+    # attempt ran the allowance out and the question went with it.
+    # Nothing waiting falls through untouched: he may well mean "try opening
+    # it again", which the model can work out from the conversation.
+    if normalize(text) in AGAIN and getattr(brain, "unanswered", None):
+        text = brain.unanswered
+        print(f"  (asking again: {text})")
+
     if normalize(text) in HEARING_CHECK and listener is not None:
         spoke = _said(listener.how_i_hear_you(), ui, toggle, cut_in)
         stats.add_reply(heard_in, 0.0, spoke, used_model=False)
@@ -195,11 +212,17 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
         # Not a fault: the free tier is used up for this minute. Writing code
         # spends output tokens fast, so this is the one he will actually meet.
         print(f"  [limit] {e}")
-        reply = ("[apologetic] I have used up my allowance for this minute. "
-                 "Give it a moment, or add a second key.")
+        how_long = getattr(e, "wait", "") or "a moment"
+        brain.unanswered = text
+        reply = (f"[apologetic] My allowance is spent for {how_long}. "
+                 "Say try again and I will have another go.")
     except Exception as e:
         print(f"  [error] {e}")
-        reply = "Something went wrong reaching my brain. Please try again."
+        brain.unanswered = text
+        reply = ("Something went wrong reaching my brain. "
+                 "Say try again and I will have another go.")
+    else:
+        brain.unanswered = None
     thought = time.time() - started
 
     spoke = _said(reply or "Done.", ui, toggle, cut_in)

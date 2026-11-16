@@ -10,14 +10,50 @@ prompt, so reo simply knows them rather than having to go and ask. That costs
 tokens on every request, which is why the number carried is capped.
 """
 import json
+import re
 import threading
 from datetime import date
 from pathlib import Path
+
+from . import config
 
 PATH = Path(__file__).resolve().parent.parent / "memory.json"
 KEEP = 60           # facts stored on disk
 CARRY = 24          # facts put in front of the model each request
 LONGEST = 200       # one spoken sentence of fact, not an essay
+
+
+# He said: "from now on if anyone asks who are you you should tell you are
+# Nandan's baby". That is not a fact about him, it is an instruction about
+# reo, and reo has to be able to find it again when asked - which means it
+# has to be stored in a shape about.py can recognise.
+#
+# Asking the model to store it in that shape was tried first and does not
+# work. Told to use "Reo says: " it called remember("If anyone asks who are
+# you, say you are Nandan's baby") instead, and the instruction was lost
+# among the facts. It is reliable about calling remember, so the shaping is
+# done here, where it either happens or does not.
+AN_INSTRUCTION = re.compile(
+    r"\b(?:say|says|saying|tell|answer|answering|respond|reply)\b[^,]{0,28}?"
+    r"\b(?:you|i)(?:\s+are|\s+am|\s*['\u2019]?re|\s*['\u2019]?m"
+    r"|\s+should\s+be)\s+(.+)$", re.IGNORECASE)
+# ... and that it is reo being described rather than him. Both persons: the
+# model says "who you are" one run and "who I am" the next.
+ABOUT_ITSELF = re.compile(
+    r"\b(?:who|what)\s+(?:you\s+are|are\s+you|i\s+am|am\s+i)\b",
+    re.IGNORECASE)
+
+
+def _as_standing(fact: str) -> str:
+    """"Reo says: I am X" if this is him saying how reo should answer."""
+    about_itself = ABOUT_ITSELF.search(fact)
+    found = AN_INSTRUCTION.search(fact)
+    if not (about_itself and found):
+        return fact
+    answer = found.group(1).strip().strip('"\'').rstrip(".")
+    if not answer:
+        return fact
+    return f"{config.WAKE_NAME.capitalize()} says: I am {answer}"
 
 
 class Memory:
@@ -44,7 +80,7 @@ class Memory:
     # --- what the model calls ---------------------------------------------
 
     def remember(self, fact: str) -> str:
-        fact = " ".join(str(fact).split())[:LONGEST]
+        fact = _as_standing(" ".join(str(fact).split()))[:LONGEST]
         if not fact:
             return "Nothing to remember."
         with self._lock:
@@ -108,6 +144,29 @@ class Memory:
         return "; ".join(found)
 
     # --- what the brain puts in the prompt ---------------------------------
+
+    def about_reo(self) -> list[str]:
+        """Facts he has stated about reo rather than about himself.
+
+        He said, in his own words, "from now on if anyone asks who are you
+        you should tell you are Nandan's baby" - and reo could not obey him,
+        because the identity questions are answered from about.py without
+        the model or the memory being consulted at all. He then asked "whose
+        baby are you" eight times and got eight different answers.
+
+        Stored as "Reo says: ..." and already in the first person, so there
+        is no grammar to do here. Turning "Reo is Nandan's baby" round in
+        code produced "I is Nandan's baby", and the list of verbs that would
+        need is endless; the model can simply write the sentence.
+
+        One at a time, on purpose: _supersedes sees the same three opening
+        words every time, so a new instruction replaces the last rather than
+        joining it. He should not have to unpick a pile of them by voice.
+        """
+        mark = f"{config.WAKE_NAME.lower()} says:"
+        with self._lock:
+            return [f["text"][len(mark):].strip() for f in self.facts
+                    if f["text"].lower().startswith(mark)]
 
     def for_prompt(self) -> str:
         """The facts, short enough to resend on every request."""

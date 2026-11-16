@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -8,6 +9,7 @@ from openai import (APIConnectionError, APIStatusError, APITimeoutError,
 
 from . import config, providers
 from .memory import memory
+from .reply import tighten
 from .stats import session
 from .tools import READ_ONLY, TOOLS, run_tool
 
@@ -47,12 +49,86 @@ SYSTEM = (
 # each new request.
 KNOWN_TOOLS = {t["name"] for t in TOOLS}
 
+# Rounds of tool calls one command may take. The last one is spent answering,
+# with the tools left out of the request.
+TOOL_STEPS = 10
+
 # Convert our tool specs to the OpenAI-compatible format
 OPENAI_TOOLS = [
     {"type": "function",
      "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
     for t in TOOLS
 ]
+
+
+# A tool argument longer than this is not kept in the history.
+#
+# This is the one that actually bit him. Asked to write a game, reo puts the
+# whole program in write_file's arguments - two thousand tokens - and that
+# argument then sits in the history and is resent on every request for the
+# next four turns, against a cap of eight thousand tokens a minute. Twice in
+# a row, all reo could say was that it had used up its allowance, and the
+# second time was only expensive because of the first.
+#
+# The result paired with the call already says what happened ("Wrote
+# game.py"), and reo has read_file for when it needs the contents back - its
+# prompt already tells it to use that before changing something it wrote. So
+# the long argument is replaced by a note of its length, once it has been run.
+LONGEST_ARGUMENT = 400
+
+
+def _slim(arguments: str) -> str:
+    """Drop the body of a long tool argument, keeping its shape.
+
+    Left alone if it is not JSON: a malformed argument is the model's to see.
+    """
+    try:
+        parsed = json.loads(arguments or "{}")
+    except (ValueError, TypeError):
+        return arguments
+    if not isinstance(parsed, dict):
+        return arguments
+    slimmed, cut = {}, False
+    for name, value in parsed.items():
+        if isinstance(value, str) and len(value) > LONGEST_ARGUMENT:
+            slimmed[name] = (value[:80].rstrip()
+                             + f"... [{len(value)} characters, sent in full]")
+            cut = True
+        else:
+            slimmed[name] = value
+    return json.dumps(slimmed, ensure_ascii=False) if cut else arguments
+
+
+# Groq says how long the wait is - "Please try again in 7m32.86s" - and reo
+# was throwing that away and saying only "give it a moment". A moment is not
+# seven minutes, and he has no way to tell the difference except by asking
+# again and being refused again.
+WAIT_IN = re.compile(r"try again in ((?:\d+h)?(?:\d+m)?[\d.]+m?s)", re.I)
+
+
+def _how_long(message: str) -> str:
+    """"another forty seconds" from whatever the 429 said, or "" if it said
+    nothing useful. Rounded and spoken, not "32.86s"."""
+    found = WAIT_IN.search(message or "")
+    if not found:
+        return ""
+    text = found.group(1)
+    seconds = 0.0
+    for amount, unit in re.findall(r"([\d.]+)(h|ms|m|s)", text):
+        try:
+            value = float(amount)
+        except ValueError:
+            continue
+        seconds += value * {"h": 3600, "m": 60, "s": 1, "ms": 0.001}[unit]
+    if seconds <= 0:
+        return ""
+    if seconds < 90:
+        return f"another {max(round(seconds), 1)} seconds"
+    if seconds < 5400:
+        minutes = round(seconds / 60)
+        return f"another {minutes} minute" + ("s" if minutes != 1 else "")
+    hours = round(seconds / 3600)
+    return f"another {hours} hour" + ("s" if hours != 1 else "")
 
 
 class OutOfAllowance(RuntimeError):
@@ -63,7 +139,13 @@ class OutOfAllowance(RuntimeError):
     Writing code makes it far more likely - a program is two thousand output
     tokens against an eight thousand token minute - and "something went wrong
     reaching my brain" sends him looking for a problem that is not there.
+
+    Carries how long the wait is, where the server said.
     """
+
+    def __init__(self, message: str, wait: str = ""):
+        super().__init__(message)
+        self.wait = wait
 
 
 class Brain:
@@ -71,6 +153,9 @@ class Brain:
         self.pool = providers.pool() if pool is None else pool
         self._clients = {}
         self.history = []
+        # The last question that got no answer, so "try again" has something
+        # to try. Cleared the moment one does get answered.
+        self.unanswered = None
 
     def _client(self, index: int, provider):
         """One client per key, made on first use and kept.
@@ -154,7 +239,7 @@ class Brain:
         """
         if not len(self.pool):
             raise RuntimeError("No model key configured: add one to .env.")
-        failures, limited = [], 0
+        failures, limited, wait = [], 0, ""
         for _ in range(len(self.pool)):
             index, provider = self.pool.current()
             try:
@@ -162,6 +247,8 @@ class Brain:
             except (RateLimitError, APIConnectionError, APITimeoutError) as e:
                 self.pool.bench(index)
                 limited += isinstance(e, RateLimitError)
+                if isinstance(e, RateLimitError):
+                    wait = wait or _how_long(str(e))
                 failures.append(f"{provider.name}: {type(e).__name__}")
             except APIStatusError as e:
                 # 4xx other than 429 is our own mistake and will fail the same
@@ -174,19 +261,25 @@ class Brain:
             if spare is not None and not self.pool.benched(spare[0]):
                 print(f"  [brain] {provider.name} unavailable; trying {spare[1].name}")
         if limited and limited == len(failures):
-            raise OutOfAllowance(", ".join(failures))
+            raise OutOfAllowance(", ".join(failures), wait)
         raise RuntimeError("Every model key refused: " + ", ".join(failures))
 
     def think(self, text: str) -> str:
         self.history.append({"role": "user", "content": text})
         spent = 0.0          # seconds the tools have taken between them
         try:
-            for _ in range(10):  # max tool steps per command
-                resp = self._complete(with_tools=True)
+            for step in range(TOOL_STEPS):
+                # Sending the tools costs 1151 tokens of the 8000 a minute -
+                # measured against the server's own count, 1620 with them and
+                # 469 without. Once reo has been told to stop fetching, or has
+                # no steps left to fetch in, that is 1151 tokens spent on a
+                # list it is not allowed to use.
+                may_fetch = step < TOOL_STEPS - 1 and spent <= config.TOOL_BUDGET
+                resp = self._complete(with_tools=may_fetch)
                 msg = resp.choices[0].message
 
                 if not msg.tool_calls:
-                    reply = (msg.content or "").strip()
+                    reply = tighten((msg.content or "").strip())
                     if not reply and resp.choices[0].finish_reason == "length":
                         # reasoning models can spend max_tokens before saying anything
                         reply = "I ran out of room before I could answer. Ask me again more simply."
@@ -205,7 +298,7 @@ class Brain:
                 if invented:
                     print(f"  [brain] no such tool: {', '.join(invented)}; not recording it")
                 if not runnable:
-                    spoken = (msg.content or "").strip()
+                    spoken = tighten((msg.content or "").strip())
                     if spoken:
                         self.history.append({"role": "assistant", "content": spoken})
                         return spoken
@@ -220,7 +313,8 @@ class Brain:
                     "content": msg.content or "",
                     "tool_calls": [
                         {"id": tc.id, "type": "function",
-                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                         "function": {"name": tc.function.name,
+                                      "arguments": _slim(tc.function.arguments)}}
                         for tc in runnable
                     ],
                 })
@@ -242,9 +336,14 @@ class Brain:
                 # And a ceiling on the lot of them. Every tool has its own
                 # timeout, but nothing added them up, and the model can ask
                 # for round after round: one reply in the log took 18.5s,
-                # which from where he is sitting is reo having died. The
-                # calls still get an answer each - the history has to stay
-                # paired - it is just an answer that says to stop fetching.
+                # which from where he is sitting is reo having died.
+                #
+                # Mostly this is reached by not being reached: past the budget
+                # the next request leaves the tools out, so there is nothing
+                # to call. It stays for the case where the model asks for one
+                # anyway, which it does. The calls still get an answer each -
+                # the history has to stay paired - it is just an answer that
+                # says to stop fetching.
                 if spent > config.TOOL_BUDGET:
                     print(f"  [brain] {spent:.0f}s of tools is enough; answering with "
                           f"what it has")

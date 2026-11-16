@@ -10,6 +10,7 @@ import pyttsx3
 import sounddevice as sd
 
 from . import config
+from .reply import tighten as drop_offers
 
 # Emotion the brain tagged its reply with -> (words per minute, volume).
 # pyttsx3 gives us no pitch control on Windows, so pace and loudness carry it.
@@ -83,6 +84,10 @@ def split_emotion(text: str) -> tuple[str, str]:
     spoken = NAMED_TAG.sub(
         lambda m: "" if m.group(1).lower() in VOICE_SETTINGS else m.group(0), spoken)
     spoken = _undouble(spoken.strip())
+    # And the offer of further help its own prompt tells it not to make.
+    # Here rather than only in the brain, so what gets printed, shown in the
+    # window and kept in the conversation is what was actually said out loud.
+    spoken = drop_offers(spoken)
     return emotion, spoken
 
 
