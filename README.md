@@ -118,6 +118,40 @@ it takes about 7s against `base`'s 2.3s on the same clip, and neither thread
 count nor `int8_float32` moved it. Seven seconds is slower than the problem it
 solves.
 
+### How long you may talk for
+
+Reo used to stop recording after twenty seconds. Twice in one session it did
+that while he was still talking, and then answered the first half of what he
+had said as though that were all of it - saying nothing about having stopped,
+because the only place it said so was a console he never looks at.
+
+Twenty seconds turned out not to be about him at all. Measured on his own
+recording, grown by repeating it:
+
+| he talks for | Groq hears it in | this laptop hears it in |
+|---|---|---|
+| 20s | 0.45s | 1.68s |
+| 28s | 0.48s | 4.71s |
+| 29s | - | **38.19s** |
+| 45s | 0.82s | - |
+| 60s | 1.44s | - |
+
+Groq barely notices. The model here falls off a cliff between 28 and 29
+seconds, where the clip stops fitting in one Whisper window and recognising
+it takes longer than he took to say it. So twenty seconds was the *local*
+model's limit, charged to him even when nothing local was going to hear him.
+
+It is now two numbers - `REO_MAX_RECORD_SECONDS=45` when Groq is listening,
+`REO_MAX_LOCAL_RECORD_SECONDS=24` when this laptop is - and reo picks by
+whichever ear answered last, not by which one was configured. With Groq
+unreachable every recording falls back here, and a forty-five second clip
+would then take longer to recognise than it took to say.
+
+When the limit does end a recording, that goes in the window: *"(I stopped
+listening at 45 seconds, so that is all I heard)"*. The answer that follows
+is to the first part of what you said, and you should not have to work that
+out from the answer being odd.
+
 ### Where the hearing happens
 
 `REO_HEARING=hosted`, the default, sends the recording to Groq's
@@ -186,23 +220,24 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-That runs both suites: 376 tests, no API key needed.
+That runs both suites: 385 tests, no API key needed.
 
-`tests/test_reo.py` is the fast one - 364 tests, no microphone, no model. It
+`tests/test_reo.py` is the fast one - 370 tests, no microphone, no model. It
 covers the things that actually broke: exit phrases with punctuation inside
 them, noise transcriptions, emotion tags and repeated answers, tool failures,
 history trimming keeping tool calls paired, contractions reaching the fast
 path, sticky language detection, names that would write a file outside reo's
 folder, and falling over to a second key, an offer of further help being cut off
 the end of a reply while a real question is not, and a written program
-not being kept in the conversation.
+not being kept in the conversation, and how long you may talk for
+following whichever ear answered last.
 
 The suite writes to a temp folder, deliberately and for the whole run. It
 drives the main loop, and the main loop records every exchange and lets
 the model remember things - which went into the real `chats.jsonl` and
 `memory.json` until someone noticed "write me a game" in there twice.
 
-`tests/test_voice.py` is the slow one, and the one that matters most. Twelve
+`tests/test_voice.py` is the slow one, and the one that matters most. Fifteen
 tests that put six seconds of real recorded speech in through a stand-in sound
 card, through the real voice detector and the real speech model, and check what
 comes out: he speaks straight away, he takes three seconds to begin, something

@@ -117,7 +117,27 @@ KEEP_MIC_OPEN = os.getenv("REO_KEEP_MIC_OPEN", "1") not in ("0", "false", "no")
 # that was, reo should say it did not catch you rather than wait all day.
 TRANSCRIBE_TIMEOUT = float(os.getenv("REO_TRANSCRIBE_TIMEOUT", "20"))
 WAIT_FOR_SPEECH_SECONDS = 6  # give up if you say nothing
-MAX_RECORD_SECONDS = 20
+# How long he may talk for. Two numbers, because the two ears cost completely
+# different things for a long sentence. Measured on his own recording, grown
+# by repeating it:
+#
+#       length   hosted   this laptop
+#         20s     0.45s      1.68s
+#         28s     0.48s      4.71s
+#         29s        -      38.19s
+#         45s     0.82s         -
+#         60s     1.44s         -
+#
+# Groq's whisper barely notices; the model here falls off a cliff between 28
+# and 29 seconds, where the clip stops fitting in one window and recognising
+# it takes longer than he took to say it. So twenty seconds was not an
+# arbitrary limit - it was the local model's limit, being applied to him even
+# when nothing local was going to hear him.
+#
+# He hit it. Twice in one session reo stopped recording while he was still
+# talking and answered the first half of what he had said.
+MAX_RECORD_SECONDS = float(os.getenv("REO_MAX_RECORD_SECONDS", "45"))
+MAX_LOCAL_RECORD_SECONDS = float(os.getenv("REO_MAX_LOCAL_RECORD_SECONDS", "24"))
 
 # Each message is resent every request, against an 8000 token/minute cap.
 MAX_HISTORY_MESSAGES = 8

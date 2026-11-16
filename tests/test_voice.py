@@ -242,6 +242,70 @@ class HearingHim(unittest.TestCase):
             self.skipTest("groq did not answer; the local path covers the rest")
         self.assertIn("hyderabad", said.lower(), f"heard {said!r}")
 
+    def heard_for(self):
+        """How long reo kept listening.
+
+        Not last_voice, which counts only the blocks the detector called
+        speech: 22 seconds of his two sentences joined comes out as 11.8
+        seconds of voice, because of the gaps between the words. And not the
+        card's position either - the microphone is held open and its reader
+        thread keeps pulling tape into the ring after reo has stopped taking
+        it, so that reads as the whole tape however early reo stopped.
+        """
+        return self.listener.last_seconds
+
+    def talking_for(self, seconds):
+        """A tape of him talking without stopping for that long.
+
+        His two sentences joined, repeated. Measured with silero: the longest
+        unvoiced run inside that is 0.70s, and 0.9s is what ends a recording,
+        so as far as reo is concerned this is one person not drawing breath.
+        """
+        cycle = np.concatenate([self.part(HIS_VOICE), self.part(HIS_HELLO)])
+        return np.tile(cycle, int(16000 * seconds / len(cycle)) + 1)[
+            :int(16000 * seconds)]
+
+    def test_he_is_not_cut_off_where_he_used_to_be(self):
+        """Twice in one session reo stopped recording while he was still
+        talking and answered the first half of what he had said. Twenty
+        seconds was the local model's limit - past 28s it takes longer to
+        recognise a clip than he took to say it - and it was being applied
+        to him even when groq was going to do the hearing.
+
+        This runs the local path, which setUp pins, so what it holds is the
+        24 second limit. The hosted 45 is checked in test_reo, where the
+        measurements it comes from are written down.
+        """
+        self.hear([self.talking_for(22.0), quiet(2.0)])
+        self.assertEqual(self.listener.cut_short, 0.0,
+                         "cut off at 22 seconds of continuous speech")
+        self.assertGreater(self.heard_for(), 20.0,
+                           f"stopped listening after {self.heard_for():.1f}s")
+        # What comes back as words is not asserted. Twenty-two seconds of his
+        # two sentences on a loop is repetitive enough for the hallucination
+        # guard to throw away, which is that guard doing its job on a tape no
+        # person would produce. Whether reo was still listening is the point.
+        self.assertEqual(self.listener.cut_short, 0.0)
+
+    def test_there_is_still_a_limit_and_he_is_told_about_it(self):
+        """Eight seconds here, so the test is quick; the real one is 24 on
+        this laptop and 45 when groq is listening."""
+        with mock.patch.object(config, "MAX_LOCAL_RECORD_SECONDS", 8.0):
+            self.hear([self.talking_for(20.0)])
+        self.assertEqual(self.listener.cut_short, 8.0)
+        # Within a block of the limit, and nowhere near the 20s of tape.
+        self.assertAlmostEqual(self.heard_for(), 8.0, delta=0.5)
+
+        # and it does not stay set, or every command after a long one would
+        # be reported as cut off too
+        self.hear([self.clip])
+        self.assertEqual(self.listener.cut_short, 0.0)
+
+    def test_an_ordinary_command_is_not_marked_as_cut_off(self):
+        self.hear([self.clip])
+        self.assertEqual(self.listener.cut_short, 0.0)
+
+
     def test_a_level_is_reported_either_way(self):
         """So "can you hear me" has something true to say."""
         self.hear([self.clip])

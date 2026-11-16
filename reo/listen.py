@@ -217,6 +217,8 @@ class Listener:
     last_level = 0.0         # how loud he was, 0 to 1
     last_voice = 0.0         # seconds of it the detector called speech
     heard_nothing = False    # the device handed back digital zero
+    cut_short = 0.0          # seconds, when the limit ended it rather than him
+    last_seconds = 0.0       # how long the last recording was
 
     def __init__(self):
         print("Loading speech model (first run downloads it)...")
@@ -290,13 +292,16 @@ class Listener:
         """Capture one utterance. Leaves a head start on self._guess when the
         transcription could be begun during the pause at the end."""
         self._guess = None
+        self.cut_short = 0.0
+        self.last_seconds = 0.0
         self.missed = "unclear"
         before = self.mic.start()
         if before is None:
             self.missed = "silent"
             return None
 
-        max_blocks = int(config.MAX_RECORD_SECONDS / BLOCK_SECONDS)
+        longest = self._longest()
+        max_blocks = int(longest / BLOCK_SECONDS)
         wait_blocks = int(config.WAIT_FOR_SPEECH_SECONDS / BLOCK_SECONDS)
         # A key press will end this, so silence need only catch the case
         # where nobody comes back to it.
@@ -355,11 +360,16 @@ class Listener:
                     break
             else:
                 if heard:
-                    print(f"  (stopped at the {config.MAX_RECORD_SECONDS} second limit)")
+                    # Not just logged. He never sees this console, and being
+                    # cut off mid-sentence and then answered as though that
+                    # was the whole thing is the part worth knowing about.
+                    self.cut_short = longest
+                    print(f"  (stopped at the {longest:.0f} second limit)")
         finally:
             self.mic.done()
 
         self.last_voice = voiced * BLOCK_SECONDS
+        self.last_seconds = len(frames) * BLOCK_SECONDS
         if nothing_said or not frames:
             self.missed = "nothing" if nothing_said else "unclear"
             return None
@@ -372,6 +382,19 @@ class Listener:
         if guess is not None and not stale:
             self._guess = guess
         return np.concatenate(frames).flatten()
+
+    def _longest(self) -> float:
+        """How long he may talk for, which depends on who is listening.
+
+        config.HEARING is the intent and heard_by is the fact: with groq
+        unreachable every recording falls back to the model here, and a
+        forty-five second clip would then take longer to recognise than he
+        took to say it. Whichever ear answered last is the one that will
+        answer next, so that is the one this is sized for.
+        """
+        ear = self.heard_by or ("groq" if config.HEARING == "hosted" else "here")
+        return (config.MAX_RECORD_SECONDS if ear == "groq"
+                else config.MAX_LOCAL_RECORD_SECONDS)
 
     def _start_guess(self, frames):
         """Start transcribing while the pause is still being waited out.

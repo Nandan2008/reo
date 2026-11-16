@@ -161,6 +161,15 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
     print(f"You: {text}")
     if ui:
         ui.line("you", text)
+    # Said for longer than reo can listen for. The answer that follows is to
+    # the first part of it, and he should not have to work that out from the
+    # answer being odd.
+    if listener is not None and getattr(listener, "cut_short", 0):
+        note = (f"(I stopped listening at {listener.cut_short:.0f} seconds, "
+                f"so that is all I heard)")
+        print(f"  {note}")
+        if ui:
+            ui.line("note", note)
     # Taken now rather than when reo starts talking, so a press during the
     # thinking counts too: he wants to interject, and the reply he no longer
     # wants should not be read out first.

@@ -3732,5 +3732,77 @@ class TheTestsStayOutOfHisFiles(unittest.TestCase):
         self.assertEqual(his.read_bytes() if his.exists() else None, before)
 
 
+class HowLongHeMayTalkFor(unittest.TestCase):
+    """Hearing a long sentence costs almost nothing hosted and falls off a
+    cliff here. Measured on his own recording, grown by repeating it: 20s
+    took 0.45s hosted and 1.68s here, 28s took 0.48s and 4.71s, and 29s here
+    took 38.19s - longer than he took to say it. So the limit has to know
+    which ear is listening, and twenty seconds for everyone was the local
+    model's limit charged to him whatever was going to hear him."""
+
+    def _listener(self):
+        ear = Listener.__new__(Listener)
+        ear.heard_by = ""
+        return ear
+
+    def test_groq_can_hear_him_out(self):
+        ear = self._listener()
+        with mock.patch.object(config, "HEARING", "hosted"):
+            self.assertEqual(ear._longest(), config.MAX_RECORD_SECONDS)
+
+    def test_the_model_here_cannot(self):
+        ear = self._listener()
+        with mock.patch.object(config, "HEARING", "local"):
+            self.assertEqual(ear._longest(), config.MAX_LOCAL_RECORD_SECONDS)
+
+    def test_it_follows_whoever_actually_answered_last(self):
+        """With groq unreachable every recording falls back here, and a
+        forty-five second clip would then simply time out. HEARING is the
+        intent; heard_by is the fact."""
+        ear = self._listener()
+        with mock.patch.object(config, "HEARING", "hosted"):
+            ear.heard_by = "here"
+            self.assertEqual(ear._longest(), config.MAX_LOCAL_RECORD_SECONDS)
+            ear.heard_by = "groq"
+            self.assertEqual(ear._longest(), config.MAX_RECORD_SECONDS)
+
+    def test_each_limit_sits_where_the_measurements_put_it(self):
+        """The local one under the cliff: 28s measured at 4.71s here and 29s
+        at 38.19s, so anything from 29 up is slower than the person speaking.
+        The hosted one above the twenty seconds he was being cut off at,
+        which cost 0.45s when 45s costs 0.82s."""
+        self.assertLess(config.MAX_LOCAL_RECORD_SECONDS, 29)
+        self.assertGreater(config.MAX_RECORD_SECONDS, 20)
+
+    def test_he_is_told_when_it_stopped_before_he_did(self):
+        """Only the console knew, and he never sees the console. Being cut
+        off mid-sentence and then answered as though that was all he said is
+        the part worth knowing about."""
+        lines = []
+        ui = SimpleNamespace(line=lambda kind, text: lines.append((kind, text)),
+                             set_state=lambda state: None)
+        listener = SimpleNamespace(cut_short=45.0, transcribe_seconds=0.0,
+                                   heard_by="groq")
+        brain = SimpleNamespace(history=[], unanswered=None,
+                                think=mock.Mock(return_value="Done."))
+        with mock.patch.object(main, "speak", lambda text, ui=None, until=None: None):
+            main.handle(brain, "the next step is to start a memory", ui, 0.0,
+                        listener, None)
+        notes = [text for kind, text in lines if kind == "note"]
+        self.assertTrue(any("45 seconds" in n for n in notes), notes)
+
+    def test_an_ordinary_command_gets_no_such_note(self):
+        lines = []
+        ui = SimpleNamespace(line=lambda kind, text: lines.append((kind, text)),
+                             set_state=lambda state: None)
+        listener = SimpleNamespace(cut_short=0.0, transcribe_seconds=0.0,
+                                   heard_by="groq")
+        brain = SimpleNamespace(history=[], unanswered=None,
+                                think=mock.Mock(return_value="Done."))
+        with mock.patch.object(main, "speak", lambda text, ui=None, until=None: None):
+            main.handle(brain, "what time is it in tokyo", ui, 0.0, listener, None)
+        self.assertFalse([text for kind, text in lines if kind == "note"])
+
+
 if __name__ == "__main__":
     unittest.main()
