@@ -642,6 +642,65 @@ Everything else - the voice detection, the pre-roll, transcribing inside the
 pause, the provider pool, the workspace, undo - is this project's own, and
 most of it exists because something measurable was wrong.
 
+## Tried, measured, and not shipped
+
+Three ideas from reading around the problem. All three were measured on this
+laptop, and none of them is in the code. They are written down because each
+one looks obviously right until you measure it.
+
+**Ending the wait early when the words look finished.** 1.5 seconds is waited
+out after every command and the transcription is already done by then, so the
+words were the obvious signal. They are not one. Whisper put a full stop on a
+clip cut mid-word - *and completed the word* - while a genuinely finished
+"Hello, hello" got no punctuation at all:
+
+| audio | what came back | ends with `.?!` |
+|---|---|---|
+| "I am from Hyderabad." whole | `I am from Hyderabad.` | yes |
+| cut at "Hyd-" | `I am from Hyderabad.` | yes |
+| cut at "Hell-" | `Hello?` | yes |
+| "Hello, hello" whole | `Hello, hello` | **no** |
+
+**A model that hears whether a sentence is finished.** Pipecat's Smart Turn
+v3.2 is the right shape for this - 8M parameters, an 8.7MB int8 ONNX file,
+BSD-2-Clause, 16kHz mono, one sigmoid out, and `onnxruntime` is already
+installed here. Its reference code builds features with
+`transformers.WhisperFeatureExtractor(chunk_length=8)`, and `transformers`
+is not installed. Built instead from faster-whisper's own extractor, which
+produces the same (80, 800) log-mel, the model separates speech from silence
+but not finished from unfinished - the same clips as above all score 0.50 or
+0.73 whatever the recipe. Four variants were tried (raw audio standardised or
+not, padding at the front or the back). That is a feature mismatch rather than
+a verdict on the model, and settling it needs `transformers` installed.
+
+Worth knowing before anyone tries again: the failure mode is cutting him off
+mid-sentence, which is the exact bug the 1.5s wait exists to prevent, and the
+published 94% accuracy figure is measured on the model's own test
+distribution. It would need checking on his accent before it could be trusted.
+
+**Groq's prompt caching.** The docs say cached tokens do not count towards
+rate limits, which would matter enormously: the limit reo actually hits is
+8000 tokens a minute against 1620 a request, 1151 of that being the list of
+the 27 things it can do. Caching is real - `usage.prompt_tokens_details.
+cached_tokens` came back as 1536 of 1731 on one request, 89% of it free. But
+it fires when it feels like it, and it cannot be steered:
+
+| request | as it is | static prose first |
+|---|---|---|
+| 1 | 0 | 0 |
+| 2 | 0 | 256 |
+| 3 | 0 | 0 |
+| 4 | **1536** | 256 |
+| 5 | 0 | 0 |
+| 6 | 0 | 0 |
+
+The theory was that today's date and everything reo remembers - both of which
+change - sat in front of the static prose and broke the exact prefix match. So
+they were moved after it. It cached *less*. The change was reverted.
+
+Measured free-tier limits for `openai/gpt-oss-120b`: 30 requests a minute,
+8000 tokens a minute, 1000 requests a day.
+
 ## Troubleshooting
 - Reo doesn't hear you: lower REO_SILENCE_THRESHOLD in .env (e.g. 0.005).
 - It cuts you off or never stops listening: raise it (e.g. 0.02).
