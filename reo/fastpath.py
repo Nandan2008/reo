@@ -11,6 +11,7 @@ which genuinely need the model. Anything not matched falls through untouched.
 """
 import ast
 import datetime
+from datetime import date
 import operator
 import re
 
@@ -142,6 +143,26 @@ NOT_AN_APP = {"the", "a", "an", "my", "this", "that", "it", "them", "up", "all",
 TLD = "com|org|net|io|tv|gov|edu"
 
 
+# How he actually asks, around the thing he is actually asking for. Over the
+# 164 things he has said to reo these account for every plain instruction the
+# fast path was missing: "open the brave browser", "open Google Chrome
+# browser", "open the claw app for me", "close it for me", "search it for me".
+#
+# This is only ever used to decide whether a route matches. What goes to the
+# model is what he said, untouched - trimming that would hand it fragments
+# like "is that" and make the hard cases harder.
+POLITELY_FIRST = re.compile(
+    r"^(?:(?:hey |ok |okay )?reo |can you |could you |would you |will you |"
+    r"please |i want you to |i need you to |go ahead and )+")
+POLITELY_AFTER = re.compile(
+    r"(?: (?:please|for me|right now|now|thanks|thank you|will you|reo))+$")
+
+
+def plainly(asked: str) -> str:
+    """What he asked for, without the manners around it."""
+    return POLITELY_AFTER.sub("", POLITELY_FIRST.sub("", asked)).strip()
+
+
 def _control(action: str, amount: int = 0):
     from . import system
     return system.control(action, amount)
@@ -169,9 +190,24 @@ def _window(match):
     return _control(match["what"].replace("z", "s"))
 
 
+# Nouns he puts on the end of a program's name. open_app matches the Start
+# menu with *name*, and his Start menu says "Brave" and "Google Chrome", so
+# "brave browser" and "google chrome browser" matched nothing at all and the
+# question went to the model.
+A_KIND_OF_THING = re.compile(
+    r"\s+(?:browser|app|application|program|window|software)$")
+AN_ARTICLE = re.compile(r"^(?:the|a|an|my)\s+")
+
+
 def _open_app(match):
     """Open a program, or hand it back to the model if the name was no good."""
-    name = match["app"].strip()
+    name = AN_ARTICLE.sub("", match["app"].strip())
+    # Twice: "the brave browser app" is a thing people say.
+    for _ in range(2):
+        name = A_KIND_OF_THING.sub("", name).strip()
+    # The article comes off before this, not instead of it: "open the brave
+    # browser" is a program and "open the first result" is not, and only the
+    # word after the article tells them apart.
     if not name or name.split()[0] in NOT_AN_APP:
         return None
     from .apps import open_app
@@ -188,6 +224,81 @@ def _open_site(match):
     from .tools import open_website
     host = match["site"].replace(" ", "")
     return open_website(f"{host}.{match['tld']}")
+
+
+# Said by name, with no ".com" on the end, and not a program on this
+# machine - so neither the website route nor the app route could take them.
+# Deliberately excludes Instagram, LinkedIn, ChatGPT and Google, because on
+# his laptop those ARE installed programs and "open instagram" should open
+# the one he has rather than a browser tab.
+A_SITE_HE_MEANS = {
+    "youtube": "youtube.com", "gmail": "mail.google.com",
+    "whatsapp": "web.whatsapp.com", "wikipedia": "wikipedia.org",
+    "reddit": "reddit.com", "netflix": "netflix.com",
+    "amazon": "amazon.in", "flipkart": "flipkart.com",
+    "github": "github.com", "stack overflow": "stackoverflow.com",
+    "hotstar": "hotstar.com", "twitter": "twitter.com",
+    "facebook": "facebook.com", "google maps": "maps.google.com",
+    "google drive": "drive.google.com", "google docs": "docs.google.com",
+}
+
+
+def _known_site(match):
+    where = A_SITE_HE_MEANS.get(AN_ARTICLE.sub("", match["app"].strip()))
+    if where is None:
+        return None
+    from .tools import open_website
+    return open_website(where)
+
+
+def _talked_about(match):
+    """"What did we talk about yesterday", when nothing was said yesterday.
+
+    Only that case. Asked it three times with the real model, twice it
+    searched correctly, was told nothing was said, searched again with no
+    day at all, and reported the week before as yesterday. Being told
+    "nothing was said", then "do not answer with another day's
+    conversation", then which days did have something on them - none of it
+    stopped the second search.
+
+    So the one answer it kept getting wrong is not its to give. A day with
+    something on it still goes to the model, because summarising a
+    conversation is a thing only the model can do.
+    """
+    from .chats import chats
+    day = _which_day(match)
+    if day is None:
+        return None
+    if any((row.get("when") or "")[:10] == day for row in chats._rows()):
+        return None                     # there is something; let it summarise
+    return _in_his_words(match, day)
+
+
+def _which_day(match):
+    found = match.groupdict()
+    # when2 because a group name cannot appear twice in one pattern, and the
+    # third phrasing needs its own.
+    said = (found.get("when") or found.get("when2") or "").strip()
+    if said in ("today", "earlier today"):
+        return date.today().isoformat()
+    if said in ("yesterday", "last night"):
+        return (date.today() - datetime.timedelta(days=1)).isoformat()
+    if found.get("ago"):
+        try:
+            return (date.today()
+                    - datetime.timedelta(days=int(found["ago"]))).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def _in_his_words(match, day: str) -> str:
+    found = match.groupdict()
+    when = (found.get("when") or found.get("when2") or "").strip()
+    if not when:
+        ago = found.get("ago")
+        when = f"{ago} days ago" if ago else f"on {day}"
+    return f"Nothing was said {when}."
 
 
 def _youtube(match):
@@ -236,6 +347,15 @@ DOES = [
     (r"(open|go to|visit|bring up) (?P<site>[a-z0-9][a-z0-9 -]*) (?P<tld>" + TLD + r")",
      _open_site),
     (r"(open|launch|start|run|bring up) (?P<app>[a-z0-9][a-z0-9 ]*)", _open_app),
+    (r"(open|go to|visit|bring up|launch|start) (?P<app>[a-z0-9][a-z0-9 ]*)",
+     _known_site),
+    # what was said on a day that nothing was said on
+    (r"what (did|have) (we|you and i) (talk(ed)? about|discuss(ed)?|say|said)"
+     r"( about)? (?P<when>today|yesterday|last night|earlier today)"
+     r"|what (did|have) (we|you and i) (talk(ed)? about|discuss(ed)?) "
+     r"(?P<ago>\d+) days ago"
+     r"|what (was|did we) (said|say|talk about) (?P<when2>yesterday|today)",
+     _talked_about),
     (r"(play|put on) (?P<what>.+) on youtube"
      r"|(search|look up|find) (?P<what2>.+) on youtube and play"
      r"( the (first|1st)( video| one)?)?", _youtube),
@@ -275,14 +395,20 @@ COMPILED = [(re.compile(pattern + r"$"), answer)
 def answer(text: str):
     """A spoken answer if this is a question the machine can answer itself,
     or None to let the model have it."""
-    asked = normalize(text)
+    asked = plainly(normalize(text))
     if not asked:
         return None
     for pattern, respond in COMPILED:
         match = pattern.fullmatch(asked)
-        if match:
-            try:
-                return respond(match)
-            except Exception:
-                return None          # fall through to the model rather than fail
+        if not match:
+            continue
+        try:
+            said = respond(match)
+        except Exception:
+            return None          # fall through to the model rather than fail
+        # A route that declines used to end the search, so "open youtube" -
+        # no such program - never reached the route that knows youtube is a
+        # website. Declining now means "not mine", and the next route tries.
+        if said is not None:
+            return said
     return None

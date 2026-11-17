@@ -305,7 +305,7 @@ FUNCTIONS = {
     "answer_about_yourself": answer_about_yourself,
     "forget": forget,
     "recall": recall,
-    "past_chats": lambda about: chats.search(about),
+    "past_chats": lambda about="", day="": chats.search(about, day),
     "open_search": open_search,
     "read_page": read_page,
     "run_command": run_command,
@@ -555,12 +555,18 @@ EVERY_TOOL = [
         "description": ("Search what the two of you have said before, from any "
                         "day. Use it when he refers to something earlier that "
                         "is not in front of you - \"what did I tell you about "
-                        "my sister\", \"what did we decide yesterday\"."),
+                        "my sister\" wants about, \"what did we talk about "
+                        "yesterday\" wants day, and \"what have we been "
+                        "talking about\" wants neither."),
         "input_schema": {
             "type": "object",
-            "properties": {"about": {"type": "string",
-                                     "description": "words to look for"}},
-            "required": ["about"],
+            "properties": {
+                "about": {"type": "string",
+                          "description": "words to look for"},
+                "day": {"type": "string",
+                        "description": "a day as 2026-11-10, or today, or "
+                                       "yesterday. Leave it out unless he "
+                                       "named a day"}},
         },
     },
     {

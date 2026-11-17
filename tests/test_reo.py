@@ -1,4 +1,5 @@
 """Offline tests: no microphone, no API key, no network."""
+import datetime
 import io
 import json
 import re
@@ -15,7 +16,7 @@ from unittest import mock
 import numpy as np
 from openai import APIConnectionError, APIStatusError, RateLimitError
 
-from reo import config, fastpath, providers, tools
+from reo import apps, config, fastpath, providers, tools
 from reo import memory as memory_module
 from reo import brain as brain_module
 from reo import chats as chatsmod
@@ -3802,6 +3803,333 @@ class HowLongHeMayTalkFor(unittest.TestCase):
         with mock.patch.object(main, "speak", lambda text, ui=None, until=None: None):
             main.handle(brain, "what time is it in tokyo", ui, 0.0, listener, None)
         self.assertFalse([text for kind, text in lines if kind == "note"])
+
+
+class LookingBackByDay(unittest.TestCase):
+    """"What did I tell you about my sister" and "what did we talk about a
+    week ago" are not the same question, and only the first has a word to
+    look for. Asked the second, reo called past_chats with nothing, got
+    "Say what to look for." back, and handed the question to him."""
+
+    def _chats(self, rows):
+        home = Path(tempfile.mkdtemp(prefix="reo-chats-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        store = Chats(home / "c.jsonl")
+        with open(store.path, "w", encoding="utf-8") as f:
+            for when, said, reply in rows:
+                f.write(json.dumps({"when": when.isoformat(timespec="seconds"),
+                                    "you": said, "reo": reply}) + "\n")
+        return store
+
+    def _both_days(self):
+        week = datetime.datetime.now() - datetime.timedelta(days=7)
+        today = datetime.datetime.now()
+        return self._chats([
+            (week, "lets plan the trip to goa in december", "Sounds good."),
+            (week, "book the flights for the goa trip", "I cannot book flights."),
+            (today, "what is the capital of peru", "Lima."),
+        ]), week.date().isoformat()
+
+    def test_asking_with_nothing_gives_the_most_recent(self):
+        """"What have we been talking about" is a real question and the
+        answer to it is not "say what to look for"."""
+        store, _ = self._both_days()
+        found = store.search()
+        self.assertIn("peru", found.lower())
+        self.assertNotIn("Say what to look for", found)
+
+    def test_a_day_gives_that_day(self):
+        store, week = self._both_days()
+        found = store.search(day=week)
+        self.assertIn("goa", found.lower())
+        self.assertNotIn("peru", found.lower())
+
+    def test_today_and_yesterday_are_days(self):
+        """Someone saying "yesterday" to a voice assistant means the day."""
+        store, _ = self._both_days()
+        self.assertIn("peru", store.search(day="today").lower())
+        self.assertIn("Nothing was said", store.search(day="yesterday"))
+
+    def test_a_day_with_nothing_on_it_says_so_and_says_to_say_so(self):
+        """Told only "nothing was said", reo searched again with no day, got
+        the most recent, and answered "yesterday we covered Peru's capital"
+        about a conversation from today."""
+        store, week = self._both_days()
+        found = store.search(day="yesterday")
+        self.assertIn("Nothing was said", found)
+        # The days that do have something on them, so an unscoped second
+        # search tells reo nothing it was not just given. Being told "do not
+        # answer with another day's conversation" did not stop it doing that.
+        self.assertIn(week, found)
+        self.assertIn(datetime.date.today().isoformat(), found)
+
+    def test_a_day_it_cannot_read_asks_for_one_it_can(self):
+        store, _ = self._both_days()
+        self.assertIn("2026-11-10", store.search(day="a week ago"))
+
+    def test_a_word_is_looked_for_outside_the_day_before_giving_up(self):
+        """Reo volunteers the day. Asked what he had said about Goa it
+        searched for Goa on today, found nothing, and said there was no note
+        about Goa - when Goa was the whole of a conversation the week before.
+        """
+        store, week = self._both_days()
+        found = store.search("goa", "today")
+        self.assertIn("goa", found.lower())
+        self.assertIn(week, found)
+        self.assertIn("another day", found)
+
+    def test_a_word_that_is_nowhere_at_all_still_says_so(self):
+        store, _ = self._both_days()
+        self.assertIn("Nothing", store.search("zebra", "today"))
+        self.assertIn("Nothing", store.search("zebra"))
+
+    def test_a_word_inside_the_day_is_not_widened(self):
+        store, week = self._both_days()
+        found = store.search("flights", week)
+        self.assertIn("flights", found.lower())
+        self.assertNotIn("another day", found)
+
+    def test_what_comes_back_says_what_it_is(self):
+        """Without it reo mixed the search up with the conversation in front
+        of it: asked what was said a week ago it searched correctly, got the
+        right exchanges, and answered with what had been said today - which
+        was also in its history, undated, because it happened today."""
+        store, week = self._both_days()
+        found = store.search(day=week)
+        self.assertIn("saved conversations", found.lower())
+        self.assertIn(week, found)
+        # and when it spans days it names them, rather than "earlier"
+        spanning = store.search()
+        self.assertIn(f"from {week} to {datetime.date.today().isoformat()}",
+                      spanning)
+
+    def test_nothing_said_at_all_is_not_an_empty_search_result(self):
+        store = self._chats([])
+        for asked in (store.search(), store.search("goa"), store.search(day="today")):
+            self.assertIn("Nothing has been said", asked)
+
+    def test_the_model_can_pass_either_or_neither(self):
+        spec = next(s for s in tools.TOOLS if s["name"] == "past_chats")
+        self.assertEqual(set(spec["input_schema"]["properties"]), {"about", "day"})
+        self.assertFalse(spec["input_schema"].get("required"))
+        self.assertEqual(tools.FUNCTIONS["past_chats"](),
+                         chatsmod.chats.search())
+
+
+class StoringWhatWasActuallySaid(unittest.TestCase):
+    """The kept conversation was holding "[neutral] She lives in Bangalore.",
+    and that tag then came back into the next session as something reo had
+    said - and went out again in every request after it."""
+
+    def test_the_emotion_tag_is_not_part_of_what_was_said(self):
+        self.assertEqual(speak_module.said_aloud("[neutral] She lives in Bangalore."),
+                         "She lives in Bangalore.")
+
+    def test_nor_is_the_offer_of_further_help(self):
+        self.assertEqual(speak_module.said_aloud("[happy] Hello! How can I help you today?"),
+                         "Hello!")
+
+    def test_nor_the_answer_said_twice(self):
+        self.assertEqual(speak_module.said_aloud("We talked about Goa.[neutral] "
+                                                 "We talked about Goa."),
+                         "We talked about Goa.")
+
+    def test_what_gets_written_down_is_what_he_heard(self):
+        brain = SimpleNamespace(history=[], unanswered=None, think=mock.Mock(
+            return_value="[neutral] She lives in Bangalore. Anything else?"))
+        before = main.chats.how_many()
+        with mock.patch.object(main, "speak", lambda text, ui=None, until=None: None):
+            main.handle(brain, "where does she live", None, 0.0, None, None)
+        self.assertEqual(main.chats.how_many(), before + 1)
+        kept = main.chats.search("bangalore")
+        self.assertIn("She lives in Bangalore.", kept)
+        self.assertNotIn("[neutral]", kept)
+        self.assertNotIn("Anything else", kept)
+
+    def test_a_fast_path_answer_is_written_down_the_same_way(self):
+        brain = SimpleNamespace(history=[], unanswered=None,
+                                think=mock.Mock(side_effect=AssertionError(
+                                    "the model should not have been asked")))
+        before = main.chats.how_many()
+        with mock.patch.object(main, "speak", lambda text, ui=None, until=None: None), \
+             mock.patch.object(main.fastpath, "answer",
+                               lambda text: "[happy] It is half past four."):
+            main.handle(brain, "what time is it", None, 0.0, None, None)
+        self.assertEqual(main.chats.how_many(), before + 1)
+        self.assertNotIn("[happy]", main.chats.search("half past"))
+
+
+class TheWayHeActuallyTalks(unittest.TestCase):
+    """Run over the 164 things he has really said to reo, the fast path
+    answered two of them. Every other plain instruction - "open the brave
+    browser", "open Google Chrome browser", "close it for me" - went to the
+    model, which is a round trip and a different answer each time for
+    something the machine can simply do.
+
+    What it was missing was not routes. It was that he puts an article in
+    front, a noun on the end, and a "for me" after that."""
+
+    HIS_APPS = ["Brave", "Google Chrome", "Chrome Remote Desktop", "Notepad",
+                "ChatGPT", "Claude", "Instagram", "LinkedIn"]
+
+    def setUp(self):
+        self.opened, self.visited, self.did = [], [], []
+
+        def open_app(name):
+            exact = [a for a in self.HIS_APPS if a.lower() == name.lower()]
+            hits = exact or [a for a in self.HIS_APPS if name.lower() in a.lower()]
+            if not hits:
+                return f"Nothing installed matches {name!r}."
+            if len(hits) > 1 and not exact:
+                return "Several apps match that, so nothing was opened."
+            self.opened.append(hits[0])
+            return f"Opened {hits[0]}."
+
+        for where, name, thing in [
+                (apps, "open_app", open_app),
+                (tools, "open_website",
+                 lambda url: self.visited.append(url) or f"Opened {url}."),
+                (reo_system, "control",
+                 lambda action, amount=0: self.did.append(action) or "Done.")]:
+            patch = mock.patch.object(where, name, thing)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_the_manners_come_off_before_matching(self):
+        self.assertEqual(fastpath.plainly("can you open notepad for me"),
+                         "open notepad")
+        self.assertEqual(fastpath.plainly("hey reo turn it up please"),
+                         "turn it up")
+        self.assertEqual(fastpath.plainly("close it for me right now"),
+                         "close it")
+
+    def test_the_article_and_the_noun_come_off_a_program(self):
+        """His Start menu says "Brave" and "Google Chrome", and open_app
+        matches it with *name*, so "brave browser" matched nothing at all."""
+        for said in ["open the brave browser", "open the Brave browser right now",
+                     "open brave browser app", "can you open the brave browser"]:
+            self.opened.clear()
+            self.assertIsNotNone(fastpath.answer(said), said)
+            self.assertEqual(self.opened, ["Brave"], said)
+
+    def test_google_chrome_browser_is_google_chrome(self):
+        self.assertIsNotNone(fastpath.answer("Open Google Chrome browser."))
+        self.assertEqual(self.opened, ["Google Chrome"])
+
+    def test_a_thing_that_is_not_a_program_still_goes_to_the_model(self):
+        """The article comes off before that check, not instead of it."""
+        for said in ["open the first result", "open the next one", "open it"]:
+            self.assertIsNone(fastpath.answer(said), said)
+        self.assertEqual(self.opened, [])
+
+    def test_two_programs_matching_is_not_guessed_at(self):
+        """"chrome" is both Google Chrome and Chrome Remote Desktop. Picking
+        one for him is worse than letting the model ask."""
+        self.assertIsNone(fastpath.answer("open chrome"))
+        self.assertEqual(self.opened, [])
+
+    def test_a_route_that_declines_lets_the_next_one_try(self):
+        """It used to end the search, so "open youtube" - no such program -
+        never reached the route that knows youtube is a website."""
+        self.assertIsNotNone(fastpath.answer("open youtube"))
+        self.assertEqual(self.visited, ["youtube.com"])
+        self.assertEqual(self.opened, [])
+
+    def test_the_sites_he_says_by_name(self):
+        for said, where in [("open gmail for me", "mail.google.com"),
+                            ("open whatsapp", "web.whatsapp.com"),
+                            ("open the youtube", "youtube.com")]:
+            self.visited.clear()
+            self.assertIsNotNone(fastpath.answer(said), said)
+            self.assertEqual(self.visited, [where], said)
+
+    def test_a_program_he_has_beats_the_website(self):
+        """Instagram, LinkedIn and ChatGPT are installed on his laptop, so
+        "open instagram" opens the one he has rather than a browser tab."""
+        for said, app in [("open instagram", "Instagram"),
+                          ("open chatgpt", "ChatGPT")]:
+            self.opened.clear()
+            self.visited.clear()
+            fastpath.answer(said)
+            self.assertEqual(self.opened, [app], said)
+            self.assertEqual(self.visited, [], said)
+
+    def test_the_laptop_controls_take_the_manners_too(self):
+        fastpath.answer("close it for me")
+        fastpath.answer("turn it up please")
+        self.assertEqual(self.did, ["close_window", "volume_up"])
+
+    def test_what_the_model_is_given_is_what_he_said(self):
+        """The trim decides whether a route matches. Trimming what goes to
+        the model would hand it fragments."""
+        asked = []
+        brain = SimpleNamespace(history=[], unanswered=None, think=mock.Mock(
+            side_effect=lambda text: asked.append(text) or "Done."))
+        with mock.patch.object(main, "speak", lambda text, ui=None, until=None: None):
+            main.handle(brain, "Can you tell me a joke, please?", None, 0.0,
+                        None, None)
+        self.assertEqual(asked, ["Can you tell me a joke, please?"])
+
+
+class WhenNothingWasSaidThatDay(unittest.TestCase):
+    """Asked "what did we talk about yesterday" with the real model, when
+    nothing had been said yesterday, it searched correctly, was told nothing
+    was said, searched again with no day at all, and reported the week before
+    as yesterday. Being told "nothing was said", then "do not answer with
+    another day's conversation", then which days did have something on them -
+    none of it stopped the second search. So that one answer is not its to
+    give any more."""
+
+    def _chats(self, when=None):
+        home = Path(tempfile.mkdtemp(prefix="reo-chats-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        store = Chats(home / "c.jsonl")
+        if when is not None:
+            with open(store.path, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"when": when.isoformat(timespec="seconds"),
+                                    "you": "what is the capital of peru",
+                                    "reo": "Lima."}) + "\n")
+        patch = mock.patch.object(chatsmod, "chats", store)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return store
+
+    def test_nothing_yesterday_is_answered_without_the_model(self):
+        self._chats(datetime.datetime.now())        # something today, not yesterday
+        for said in ["what did we talk about yesterday",
+                     "what did we discuss yesterday",
+                     "what did you and i talk about yesterday"]:
+            self.assertEqual(fastpath.answer(said), "Nothing was said yesterday.",
+                             said)
+
+    def test_a_day_with_something_on_it_goes_to_the_model(self):
+        """Summarising a conversation is a thing only the model can do."""
+        self._chats(datetime.datetime.now())
+        self.assertIsNone(fastpath.answer("what did we talk about today"))
+
+    def test_days_ago_counts_back(self):
+        self._chats(datetime.datetime.now())
+        self.assertEqual(fastpath.answer("what did we talk about 3 days ago"),
+                         "Nothing was said 3 days ago.")
+
+    def test_it_says_it_the_way_he_asked_it(self):
+        self._chats(datetime.datetime.now() - datetime.timedelta(days=5))
+        self.assertEqual(fastpath.answer("what did we talk about today"),
+                         "Nothing was said today.")
+
+    def test_a_vaguer_day_is_left_to_the_model(self):
+        """"Last week" is a range, not a day, and guessing which day he
+        meant would be worse than searching."""
+        self._chats(datetime.datetime.now())
+        for said in ["what did we talk about last week",
+                     "what did we talk about a while ago",
+                     "what did we talk about on monday"]:
+            self.assertIsNone(fastpath.answer(said), said)
+
+    def test_nothing_ever_said_is_still_answered(self):
+        self._chats(None)
+        self.assertEqual(fastpath.answer("what did we talk about yesterday"),
+                         "Nothing was said yesterday.")
 
 
 if __name__ == "__main__":

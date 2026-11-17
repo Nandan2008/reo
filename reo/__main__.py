@@ -10,7 +10,7 @@ from .stats import session as stats
 from .brain import Brain, OutOfAllowance
 from .chats import chats
 from .listen import MISSED, Listener
-from .speak import speak
+from .speak import said_aloud, speak
 from . import tools
 from .text import is_speech, normalize
 
@@ -208,7 +208,7 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
         # keep the exchange in history, or a follow-up loses the thread
         brain.history.append({"role": "user", "content": text})
         brain.history.append({"role": "assistant", "content": quick})
-        chats.add(text, quick)
+        chats.add(text, said_aloud(quick))
         stats.add_reply(heard_in, 0.0, spoke, used_model=False)
         print(f"  [time] {_heard_detail(heard_in, listener)}  "
               f"answered directly (no model)  spoke {spoke:.1f}s")
@@ -235,7 +235,10 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
     thought = time.time() - started
 
     spoke = _said(reply or "Done.", ui, toggle, cut_in)
-    chats.add(text, reply)
+    # What was said out loud, not the string the model produced: the kept
+    # conversation was holding "[neutral] She lives in Bangalore.", and that
+    # tag then came back into the next session as something reo had said.
+    chats.add(text, said_aloud(reply or "Done."))
 
     # Where a reply's time actually went, so slowness can be read off the log
     # instead of guessed at.

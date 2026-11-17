@@ -91,6 +91,12 @@ def split_emotion(text: str) -> tuple[str, str]:
     return emotion, spoken
 
 
+def said_aloud(text: str) -> str:
+    """What reo actually says, given what the model produced: the emotion tag
+    off, the answer said once, and no offer of further help."""
+    return split_emotion(text)[1]
+
+
 def _pick_voice(engine) -> None:
     if not config.VOICE_NAME:
         return

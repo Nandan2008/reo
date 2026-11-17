@@ -220,9 +220,9 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-That runs both suites: 385 tests, no API key needed.
+That runs both suites: 417 tests, no API key needed.
 
-`tests/test_reo.py` is the fast one - 370 tests, no microphone, no model. It
+`tests/test_reo.py` is the fast one - 402 tests, no microphone, no model. It
 covers the things that actually broke: exit phrases with punctuation inside
 them, noise transcriptions, emotion tags and repeated answers, tool failures,
 history trimming keeping tool calls paired, contractions reaching the fast
@@ -418,9 +418,68 @@ Every command is written to `reo.log`.
 
 ## The quick answers
 
-Time, date, battery, memory, disk, uptime and arithmetic are answered straight
-from the machine, with no model call at all - instantly, instead of the two
-seconds a round trip to Groq costs.
+Asked the time, reo used to make a round trip to Groq, a tool call, and a
+second round trip - about two seconds for something the machine knows
+instantly. So anything deterministic is routed here first and the model is
+only paid for when the phrasing is genuinely fuzzy.
+
+Then the log was checked against it. Of **164 things actually said to reo,
+the fast path answered two.** Every other plain instruction went to the
+model.
+
+What it was missing was not routes. It was that nobody talks the way
+patterns are written:
+
+| what he said | what the route wanted |
+|---|---|
+| "Open the brave **browser**." | `open brave` |
+| "Open Google Chrome **browser**." | `open google chrome` |
+| "Open the claw app **for me**." | `open claw` |
+| "Close it **for me**." | `close it` |
+| "Open YouTube!" | a program called YouTube |
+
+So the manners come off before a route is matched - a leading "can you",
+"hey reo", "please"; a trailing "for me", "right now", "please" - and an
+article and a kind-of-thing noun come off a program's name. His Start menu
+says "Brave" and "Google Chrome", and `open_app` matches it with `*name*`,
+so "brave browser" matched nothing at all.
+
+**The trim is only ever used to decide whether a route matches.** What goes
+to the model is what he said, untouched; trimming that would hand it
+fragments like "is that" and make the hard cases harder.
+
+Two more things changed with it:
+
+- A route that declines now lets the next one try. It used to end the
+  search, so "open youtube" - no such program - never reached the route that
+  knows YouTube is a website.
+- Sites said by name with no ".com" open in the browser. Not Instagram,
+  LinkedIn, ChatGPT or Google, because on this laptop those *are* installed
+  programs and "open instagram" should open the one you have.
+
+"Open chrome" deliberately still goes to the model: it matches both Google
+Chrome and Chrome Remote Desktop, and picking one for you is worse than
+being asked which.
+
+### The one answer the model kept getting wrong
+
+"What did we talk about yesterday", when nothing was said yesterday, is
+answered here and never reaches the model. Asked it three times with the
+real model it searched correctly, was told nothing was said, searched again
+with no day at all, and reported the week before as yesterday. Being told
+"nothing was said", then "do not answer with another day's conversation",
+then which days *did* have something on them - none of it stopped the second
+search.
+
+A day that *does* have something on it still goes to the model, because
+summarising a conversation is a thing only the model can do.
+
+### What they cover
+
+Time, date, battery, memory, disk, uptime and arithmetic, straight from the
+machine. The volume, mute, the media keys, the windows, locking the screen.
+Opening a program or a website. Undoing the last thing. What reo is, who
+built it, how to stop it. And the day nothing was said on.
 
 Each pattern has to match the whole sentence, so "what time is it" is instant
 while "what time is it in Tokyo" still goes to the model, where it belongs.
@@ -460,6 +519,46 @@ thinks happened a minute ago.
 **Looking back.** Everything ever said stays on disk and `past_chats` searches
 it, which costs nothing until reo actually goes looking. That is what answers
 "what did I tell you about my sister" a week later.
+
+Three questions, not one, and they took three goes to get right:
+
+| you ask | it searches by |
+|---|---|
+| "what did I tell you about my sister" | the words |
+| "what did we talk about yesterday" | the day |
+| "what have we been talking about" | neither - the most recent |
+
+Only the first has a word to look for. Asked the second, reo called the
+search with nothing, got "say what to look for" back, and asked *him* what he
+wanted to know.
+
+The day is reo's own idea. Given only a word to pass it invented the
+parameter anyway - `past_chats({'about': '', 'day': '2026-11-10'})` - and
+when that was ignored it asked for everything and answered "what did we talk
+about yesterday" with a conversation from the week before. It had the right
+shape and nowhere to put it.
+
+Two more things it got wrong, both fixed by changing what comes back rather
+than by telling it harder:
+
+- Asked what was said a week ago it searched correctly, got the right
+  exchanges, and then answered with what had been said *today* - which was
+  also in its history, undated, because it happened today. What comes back
+  now says what it is and which day it is from.
+- Told "nothing was said yesterday", it searched again with no day, got the
+  most recent, and dated that to yesterday. Adding "do not answer with
+  another day's conversation" did not stop it. So the answer now lists the
+  days that *do* have something on them, and a second search tells it
+  nothing it was not just given.
+
+And reo volunteers the day when you did not ask for one, so a word that finds
+nothing inside a day is looked for outside it before giving up: asked what
+you had said about Goa it searched today, found nothing, and said there was
+no note about Goa - when Goa was the whole of a conversation the week before.
+
+What gets written down is what was said out loud, not the string the model
+produced. The file was holding `[neutral] She lives in Bangalore.`, and that
+tag came back into the next session as something reo had said.
 
 One line of JSON per exchange, appended. Not a single JSON array: reo is
 killed by closing its window, and a half-written array is an unreadable file
@@ -510,6 +609,8 @@ third of a second, and turned "Sure thing, digital son" into "Digital son".
 - "Open YouTube"
 - "Search for best Python books"
 - "From now on, if anyone asks who you are, tell them you are my baby"
+- "What did we talk about yesterday?"
+- "What did I tell you about my sister?"
 - "Try again"
 
 ## What was taken from where
