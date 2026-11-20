@@ -739,17 +739,17 @@ apart. "Version 2.0.1" was read as "version 2. 0. 1".
 
 **Eight of the twenty-eight tools crashed on what the model actually sends.**
 Fuzzed with the arguments a misheard command turns into - nothing, an empty
-string, a null, a number where a word belongs - eight raised. 
+string, a null, a number where a word belongs - eight raised. `run_tool`
 catches it, so reo does not die, but the exception becomes the answer: what
 he heard was "Tool search_web failed: 'NoneType' object has no attribute
 'strip'". They say what is missing now. An empty command was also being
 handed to the shell and run.
 
 The window had no tests at all, which is a strange gap for the whole visible
-part of the thing.  is the page's only way in and it asks four times
+part of the thing. `poll()` is the page's only way in and it asks four times
 a second; anything raising in there failed the call on the JavaScript side
 and the window stopped updating for good, because the page cannot tell a
-broken bridge from a slow one.  had already frozen there once.
+broken bridge from a slow one. `stats.rows()` had already frozen there once.
 Each panel is fetched separately now, and a panel that fails is simply
 missing for that tick.
 
