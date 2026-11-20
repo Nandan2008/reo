@@ -250,9 +250,9 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-That runs both suites: 481 tests, no API key needed.
+That runs both suites: 497 tests, no API key needed.
 
-`tests/test_reo.py` is the fast one - 466 tests, no microphone, no model. It
+`tests/test_reo.py` is the fast one - 482 tests, no microphone, no model. It
 covers the things that actually broke: exit phrases with punctuation inside
 them, noise transcriptions, emotion tags and repeated answers, tool failures,
 history trimming keeping tool calls paired, contractions reaching the fast
@@ -646,6 +646,8 @@ third of a second, and turned "Sure thing, digital son" into "Digital son".
 - "What did we talk about yesterday?"
 - "What did I tell you about my sister?"
 - "Why are you slow?"
+- "Remember my voice"
+- "Forget my voice"
 - "Try again"
 
 ## What was taken from where
@@ -676,6 +678,47 @@ compositing for the glow instead.
 Everything else - the voice detection, the pre-roll, transcribing inside the
 pause, the provider pool, the workspace, undo - is this project's own, and
 most of it exists because something measurable was wrong.
+
+## Only answering you
+
+Say **"remember my voice"**. Reo asks for three short recordings, checks they
+sound like each other, and from then on answers you and nobody else - not the
+television, not someone else in the room, and not itself. **"Forget my
+voice"** puts it back.
+
+It is off until you ask for it.
+
+A 192-number voiceprint is taken from the speech itself and compared with the
+one you enrolled. Measured here before any of it was written, on two voices
+saying five different sentences each:
+
+| | score |
+|---|---|
+| same voice, different words | 0.684 to 0.855 |
+| different voices | 0.214 to 0.283 |
+
+A gap of 0.40, on clips of 1.8 to 3.7 seconds - which is the length of the
+things you actually say. The threshold sits at 0.45, nearer the stranger's
+end on purpose.
+
+The model is SpeechBrain's ECAPA-TDNN converted to ONNX, so it runs on
+`onnxruntime` alone: no PyTorch, 84MB, Apache-2.0. It needs nothing new
+installed - `onnxruntime` and `huggingface_hub` already come with the speech
+model - and downloads itself on first use.
+
+**The one thing this must never do is make reo deaf to you.** So:
+
+- A clip too short to judge is let through, not refused. Your own
+  `diagnose.wav` has a 1.7 second stretch that scores 0.086 against the rest
+  of your own voice; guessing from that would make reo deaf at random.
+- Anything it cannot decide - no model, no network, nothing enrolled - is
+  let through.
+- Enrolment checks itself. If your three takes do not agree, nothing is
+  stored and reo says so, rather than locking you out.
+- When it does turn something down it says so, with the score, so reo is
+  never quietly ignoring you.
+
+`voiceprint.json` is not committed. It is your voice.
 
 ## Not answering itself
 

@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+import wave
 import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +27,7 @@ from reo import chats as chatsmod
 from reo.chats import Chats
 from reo import pointer
 from reo import webui
+from reo import voiceprint as voiceprint_module
 from reo import shell as shell_module
 from reo import undo
 from reo import workspace
@@ -4925,6 +4927,220 @@ class TheToolsGoOnEveryRequest(unittest.TestCase):
         self.assertTrue(all(self.asked), self.asked)
         refused = [m for m in brain.history if m.get("role") == "tool"]
         self.assertTrue(any("taking too long" in m["content"] for m in refused))
+
+
+def _a_voice(seed, like=None, how_alike=0.9):
+    """A stand-in voiceprint. With `like`, one that sounds that similar."""
+    rng = np.random.default_rng(seed)
+    vector = rng.normal(size=192).astype(np.float32)
+    vector /= np.linalg.norm(vector)
+    if like is not None:
+        # Both unit length before mixing. Without that the random part has a
+        # norm of about 14 and swamps the voice it is supposed to resemble.
+        vector = how_alike * np.asarray(like) + (1 - how_alike) * vector
+    return vector / np.linalg.norm(vector)
+
+
+class OnlyAnsweringHim(unittest.TestCase):
+    """His words, from the log: "Remember my voice from now on, you should
+    only respond to me." Reo had to say it could not.
+
+    It is also the fix for the thing that has gone wrong twice - reo
+    answering something he did not say. Once that was reo's own voice coming
+    back off the speaker, once it was whisper inventing "Bye" out of silence.
+
+    The voiceprints here are stand-ins, so these test the judgement rather
+    than the model. The model itself is measured in the test below and in
+    the README: same voice 0.684 to 0.855, different voices 0.214 to 0.283."""
+
+    def _print(self, prints=None):
+        home = Path(tempfile.mkdtemp(prefix="reo-voice-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        it = voiceprint_module.Voiceprint(home / "vp.json")
+        if prints is not None:
+            taken = iter(prints)
+            it._print_of = lambda audio: next(taken, None)
+        return it
+
+    def test_it_does_nothing_until_he_teaches_it(self):
+        it = self._print()
+        self.assertFalse(it.enrolled)
+        self.assertIsNone(it.is_him(np.zeros(32000, np.float32), 5.0))
+
+    def test_learning_from_takes_that_agree(self):
+        him = _a_voice(1)
+        it = self._print([_a_voice(n, like=him) for n in (2, 3, 4)])
+        ok, note = it.learn([object()] * 3)
+        self.assertTrue(ok, note)
+        self.assertTrue(it.enrolled)
+
+    def test_takes_that_disagree_are_refused(self):
+        """A voiceprint that cannot recognise its own owner would simply
+        stop reo answering him, so nothing is stored."""
+        it = self._print([_a_voice(n) for n in (5, 6, 7)])
+        ok, note = it.learn([object()] * 3)
+        self.assertFalse(ok)
+        self.assertFalse(it.enrolled)
+        self.assertIn("rather than risk ignoring you", note)
+
+    def test_one_usable_take_is_not_enough(self):
+        it = self._print([_a_voice(8), None, None])
+        ok, note = it.learn([object()] * 3)
+        self.assertFalse(ok)
+        self.assertIn("quieter", note)
+
+    def test_him_gets_through_and_a_stranger_does_not(self):
+        him = _a_voice(10)
+        it = self._print([_a_voice(n, like=him) for n in (11, 12, 13)])
+        self.assertTrue(it.learn([object()] * 3)[0])
+        it._print_of = lambda audio: _a_voice(14, like=him)
+        self.assertTrue(it.is_him(object(), 3.0))
+        it._print_of = lambda audio: _a_voice(99)
+        self.assertFalse(it.is_him(object(), 3.0))
+
+    def test_a_clip_too_short_to_judge_is_let_through(self):
+        """His own diagnose.wav has a 1.7 second stretch that scores 0.086
+        against the rest of his own voice. Guessing from that would make reo
+        deaf at random."""
+        him = _a_voice(20)
+        it = self._print([_a_voice(n, like=him) for n in (21, 22, 23)])
+        it.learn([object()] * 3)
+        it._print_of = lambda audio: _a_voice(98)       # a stranger's print
+        self.assertIsNone(it.is_him(object(), voiceprint_module.ENOUGH - 0.1))
+
+    def test_being_unable_to_tell_means_answering(self):
+        him = _a_voice(30)
+        it = self._print([_a_voice(n, like=him) for n in (31, 32, 33)])
+        it.learn([object()] * 3)
+        it._print_of = lambda audio: None               # no model, no network
+        self.assertIsNone(it.is_him(object(), 5.0))
+
+    def test_it_survives_being_closed(self):
+        him = _a_voice(40)
+        it = self._print([_a_voice(n, like=him) for n in (41, 42, 43)])
+        it.learn([object()] * 3)
+        again = voiceprint_module.Voiceprint(it.path)
+        self.assertTrue(again.enrolled)
+        again._print_of = lambda audio: _a_voice(44, like=him)
+        self.assertTrue(again.is_him(object(), 3.0))
+
+    def test_forgetting_puts_it_back_as_it_was(self):
+        him = _a_voice(50)
+        it = self._print([_a_voice(n, like=him) for n in (51, 52, 53)])
+        it.learn([object()] * 3)
+        self.assertIn("anyone", it.forget())
+        self.assertFalse(it.enrolled)
+        self.assertFalse(it.path.exists())
+        self.assertIsNone(it.is_him(object(), 5.0))
+
+    def test_his_voice_is_not_committed(self):
+        ignored = (Path(__file__).resolve().parent.parent / ".gitignore"
+                   ).read_text(encoding="utf-8")
+        self.assertIn("voiceprint.json", ignored)
+
+    def test_the_real_model_reads_his_actual_voice(self):
+        """Not a judgement, just that the ONNX path works on his recording.
+        Skipped where diagnose.wav is not there, and where it cannot be
+        downloaded - no network is not a reason to fail a test."""
+        clip = Path(__file__).resolve().parent.parent / "diagnose.wav"
+        if not clip.exists():
+            self.skipTest("no diagnose.wav here")
+        with wave.open(str(clip)) as w:
+            him = (np.frombuffer(w.readframes(w.getnframes()), np.int16)
+                   .astype(np.float32) / 32768.0)
+        it = voiceprint_module.Voiceprint(Path(tempfile.mkdtemp()) / "vp.json")
+        with contextlib.redirect_stdout(io.StringIO()):
+            taken = it._print_of(him)
+        if taken is None:
+            self.skipTest("the speaker model could not be loaded here")
+        self.assertEqual(taken.shape, (192,))
+        self.assertAlmostEqual(float(np.linalg.norm(taken)), 1.0, places=4)
+        # the same clip against itself is the one answer that must be certain
+        self.assertAlmostEqual(float(np.dot(taken, it._print_of(him))), 1.0,
+                               places=4)
+
+
+class TheLoopOnlyAnswersHim(unittest.TestCase):
+    """Where it actually bites: a voice that is not his never reaches the
+    model, and reo says so rather than going quietly deaf."""
+
+    def _run(self, verdict, heard=("open youtube", "goodbye")):
+        answered = []
+        words = iter(heard)
+
+        def listen(**kw):
+            # Ctrl+C when the tape runs out. Returning "" instead sent _loop
+            # round for ever, because a rejected voice means carry on
+            # listening - which is right in life and a hang in a test.
+            try:
+                return next(words)
+            except StopIteration:
+                raise KeyboardInterrupt
+
+        listener = SimpleNamespace(listen=listen,
+                                   last_audio=np.zeros(32000, np.float32),
+                                   last_voice=3.0, missed="")
+        toggle = SimpleNamespace(listening=True, presses=0,
+                                 wait_until_listening=lambda: None,
+                                 listen_now=lambda: None)
+        brain = SimpleNamespace(history=[], unanswered=None)
+        said = io.StringIO()
+        with mock.patch.object(voiceprint_module.voiceprint, "is_him",
+                               lambda audio, voiced: verdict), \
+             mock.patch.object(main, "handle",
+                               lambda b, text, *a, **kw: answered.append(text)
+                               or text != "goodbye"), \
+             mock.patch.object(main, "speak", lambda *a, **kw: None), \
+             contextlib.redirect_stdout(said):
+            main._loop(listener, brain, None, toggle, "Ctrl+Alt+R", None)
+        return answered, said.getvalue()
+
+    def test_a_stranger_is_not_answered(self):
+        answered, said = self._run(False, heard=("open youtube", "goodbye"))
+        self.assertEqual(answered, [])
+        self.assertIn("not your voice", said)
+
+    def test_he_is(self):
+        answered, _ = self._run(True)
+        self.assertEqual(answered, ["open youtube", "goodbye"])
+
+    def test_and_so_is_anyone_when_it_cannot_tell(self):
+        """Reo going deaf is worse than reo answering the radio."""
+        answered, _ = self._run(None)
+        self.assertEqual(answered, ["open youtube", "goodbye"])
+
+    def test_asking_it_to_learn_never_reaches_the_model(self):
+        learned = []
+        brain = SimpleNamespace(history=[], unanswered=None,
+                                think=mock.Mock(side_effect=AssertionError(
+                                    "the model should not have been asked")))
+        listener = SimpleNamespace(last_audio=None, last_voice=0.0,
+                                   transcribe_seconds=0.0, heard_by="",
+                                   cut_short=0.0)
+        with mock.patch.object(main, "_learn_his_voice",
+                               lambda *a, **kw: learned.append(True)), \
+             mock.patch.object(main, "speak", lambda *a, **kw: None), \
+             contextlib.redirect_stdout(io.StringIO()):
+            for phrase in ["remember my voice", "only answer me",
+                           "you should only respond to me"]:
+                learned.clear()
+                main.handle(brain, phrase, None, 0.0, listener, None)
+                self.assertEqual(learned, [True], phrase)
+
+    def test_and_neither_does_asking_it_to_forget(self):
+        forgot = []
+        brain = SimpleNamespace(history=[], unanswered=None,
+                                think=mock.Mock(side_effect=AssertionError(
+                                    "the model should not have been asked")))
+        listener = SimpleNamespace(last_audio=None, last_voice=0.0,
+                                   transcribe_seconds=0.0, heard_by="",
+                                   cut_short=0.0)
+        with mock.patch.object(voiceprint_module.voiceprint, "forget",
+                               lambda: forgot.append(True) or "Forgotten."), \
+             mock.patch.object(main, "speak", lambda *a, **kw: None), \
+             contextlib.redirect_stdout(io.StringIO()):
+            main.handle(brain, "forget my voice", None, 0.0, listener, None)
+        self.assertEqual(forgot, [True])
 
 
 if __name__ == "__main__":

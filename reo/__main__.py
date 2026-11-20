@@ -23,6 +23,20 @@ from .text import is_speech, normalize
 AGAIN = {"try again", "try that again", "try it again", "ask that again",
          "ask it again", "retry", "have another go", "try once more"}
 
+# Teaching reo whose voice to answer, and unteaching it. His words, from
+# the log: "Remember my voice from now on, you should only respond to me."
+LEARN_VOICE = {
+    "remember my voice", "learn my voice", "remember my voice from now on",
+    "only answer me", "only respond to me", "only listen to me",
+    "only answer my voice", "learn my voice from now on",
+    "you should only respond to me", "only talk to me",
+}
+FORGET_VOICE = {
+    "forget my voice", "answer anyone", "listen to anyone",
+    "respond to anyone", "stop recognising my voice",
+    "stop recognizing my voice", "forget my voice from now on",
+}
+
 EXIT_PHRASES = {"goodbye", "bye", "exit", "quit", "stop listening", "goodbye reo", "bye reo"}
 
 # Asked this, reo reports on the recording he has just made rather than on the
@@ -91,6 +105,52 @@ def _my_own_voice(text: str) -> bool:
     if time.time() - voice._went_quiet > ECHO_WINDOW:
         return False
     return heard in said
+
+
+def _learn_his_voice(listener, ui, toggle, cut_in) -> None:
+    """Record him a few times and keep what his voice sounds like.
+
+    Three takes rather than one, and they are checked against each other
+    before anything is stored - a voiceprint that cannot recognise its own
+    owner would simply stop reo answering him.
+    """
+    from .voiceprint import TAKES, voiceprint
+
+    _said(f"Say something ordinary, {TAKES} times, a few seconds each. "
+          f"Go ahead.", ui, toggle, cut_in)
+    takes = []
+    for number in range(1, TAKES + 1):
+        if ui:
+            ui.set_state("listening")
+        listener.listen(stop_now=(lambda: not toggle.listening)
+                        if toggle is not None else None)
+        clip = getattr(listener, "last_audio", None)
+        voiced = getattr(listener, "last_voice", 0.0)
+        if clip is None or voiced < 1.0:
+            _said("I did not get enough of that one. Say a bit more.",
+                  ui, toggle, cut_in)
+            continue
+        takes.append(clip)
+        if number < TAKES:
+            _said(f"Good. {TAKES - len(takes)} more.", ui, toggle, cut_in)
+    ok, note = voiceprint.learn(takes)
+    print(f"  [voice] {'enrolled' if ok else 'not enrolled'}: {note}")
+    _said(note, ui, toggle, cut_in)
+
+
+def _someone_else(listener) -> bool:
+    """Was that somebody other than the person reo was taught?
+
+    False whenever it cannot tell, which covers not being enrolled, a clip
+    too short to judge, and the model being unavailable. Being unsure has to
+    mean answering: reo going deaf is worse than reo answering the radio.
+    """
+    from .voiceprint import voiceprint
+
+    if listener is None:
+        return False
+    return voiceprint.is_him(getattr(listener, "last_audio", None),
+                             getattr(listener, "last_voice", 0.0)) is False
 
 
 def _tee_to_logfile():
@@ -281,6 +341,15 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
         stats.add_reply(heard_in, 0.0, spoke, used_model=False)
         print(f"  [time] {_heard_detail(heard_in, listener)}  "
               f"answered directly (no model)  spoke {spoke:.1f}s")
+        return True
+
+    if normalize(text) in LEARN_VOICE and listener is not None:
+        _learn_his_voice(listener, ui, toggle, cut_in)
+        return True
+
+    if normalize(text) in FORGET_VOICE:
+        from .voiceprint import voiceprint
+        _said(voiceprint.forget(), ui, toggle, cut_in)
         return True
 
     if normalize(text) in EXIT_PHRASES:
@@ -475,6 +544,15 @@ def _loop(listener, brain, waker, toggle, combination, ui):
             if ui:
                 ui.line("note", "the microphone failed; press the key and try again")
             text = ""
+
+        if _someone_else(listener):
+            from .voiceprint import voiceprint
+            note = (f"(that was not your voice, so I left it alone "
+                    f"- {voiceprint.last_score:.2f})")
+            print(f"  {note}")
+            if ui:
+                ui.line("note", note)
+            continue
 
         if _my_own_voice(text):
             note = "(that was my own voice coming back - ignoring it)"

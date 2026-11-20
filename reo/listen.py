@@ -236,6 +236,7 @@ class Listener:
     heard_nothing = False    # the device handed back digital zero
     cut_short = 0.0          # seconds, when the limit ended it rather than him
     last_seconds = 0.0       # how long the last recording was
+    last_audio = None        # the last recording itself, for the voiceprint
 
     def __init__(self):
         print("Loading speech model (first run downloads it)...")
@@ -398,7 +399,8 @@ class Listener:
             return None
         if guess is not None and not stale:
             self._guess = guess
-        return np.concatenate(frames).flatten()
+        self.last_audio = np.concatenate(frames).flatten()
+        return self.last_audio
 
     def _longest(self) -> float:
         """How long he may talk for, which depends on who is listening.

@@ -76,6 +76,14 @@ VOICE_NAME = os.getenv("REO_VOICE", "zira")
 # Playback speed. Orpheus speaks slowly; 1.0 is its own pace.
 SPEECH_SPEED = float(os.getenv("REO_SPEECH_SPEED", "1.15"))
 
+# How alike two recordings must sound to be the same person, once he has
+# enrolled his voice with "remember my voice". Measured on Windows' two
+# voices saying five sentences each: the same voice scored 0.684 to 0.855
+# and different voices 0.214 to 0.283, so this sits in the middle of a gap
+# of 0.40 - deliberately nearer the stranger's end, because turning him away
+# is the worse mistake of the two.
+VOICE_MATCH = float(os.getenv("REO_VOICE_MATCH", "0.45"))
+
 SAMPLE_RATE = 16000
 SILENCE_THRESHOLD = float(os.getenv("REO_SILENCE_THRESHOLD", "0.01"))
 # A recording whose loudest moment is below this never reaches Whisper, which
