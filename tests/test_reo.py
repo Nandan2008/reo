@@ -4821,5 +4821,111 @@ class WhisperSayingGoodbyeForHim(unittest.TestCase):
         self.assertEqual(ear.missed, "quiet")
 
 
+class TheToolsGoOnEveryRequest(unittest.TestCase):
+    """They are not cheap - 1151 tokens of the 8000 a minute, measured
+    against the server's own count - so for a while reo left them off the
+    last step and off anything past the tool budget, since it was not allowed
+    to call one anyway.
+
+    That was wrong. Asked five ordinary questions with no tools in the
+    request, gpt-oss tried to call one twice, and groq answers that with
+    400 "Tool choice is none, but model called a tool" - which reaches him as
+    "Something went wrong reaching my brain", a line that is in his log from
+    November. A third question came back empty. With the tools attached,
+    nothing failed."""
+
+    def _brain(self, turns):
+        brain = Brain.__new__(Brain)
+        brain.pool, brain._clients, brain.history = None, {}, []
+        brain.unanswered = None
+        self.asked = []
+
+        def complete(with_tools):
+            self.asked.append(with_tools)
+            return next(turns)
+
+        brain._complete = complete
+        return brain
+
+    @staticmethod
+    def _says(text):
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=text, tool_calls=None),
+            finish_reason="stop")])
+
+    @staticmethod
+    def _calls(name, arguments="{}"):
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content="", tool_calls=[SimpleNamespace(
+                id="c1", function=SimpleNamespace(name=name,
+                                                  arguments=arguments))]),
+            finish_reason="tool_calls")])
+
+    def test_a_plain_answer_still_carried_them(self):
+        brain = self._brain(iter([self._says("Lima.")]))
+        brain.think("capital of peru")
+        self.assertEqual(self.asked, [True])
+
+    def test_so_does_the_request_that_follows_a_tool(self):
+        brain = self._brain(iter([self._calls("get_datetime"),
+                                  self._says("It is nine.")]))
+        with mock.patch.object(brain_module, "run_tool",
+                               lambda name, args: "nine o'clock"):
+            brain.think("what time is it")
+        self.assertEqual(self.asked, [True, True])
+
+    def test_and_the_very_last_step_of_all(self):
+        turns = iter([self._calls("get_datetime")] * (brain_module.TOOL_STEPS - 1)
+                     + [self._says("Done.")])
+        brain = self._brain(turns)
+        with mock.patch.object(brain_module, "run_tool",
+                               lambda name, args: "ok"):
+            brain.think("go round and round")
+        self.assertTrue(all(self.asked), self.asked)
+
+    def test_running_out_of_steps_still_ends_in_an_answer(self):
+        """It used to end in "Sorry, that took too many steps.", which is in
+        his log three times. Giving him nothing after ten round trips is the
+        worst of both; one step is held back to say something in."""
+        # Asking for a tool every round until it is told to stop, which is
+        # what gpt-oss does: it answers once the result says to.
+        rounds, told_to_answer = {"n": 0}, []
+
+        def complete(with_tools):
+            rounds["n"] += 1
+            told = [m for m in brain.history
+                    if m.get("role") == "tool" and "Answer now" in m["content"]]
+            if told:
+                told_to_answer.append(True)
+                return self._says("Here is what I found.")
+            return self._calls("search_web", '{"query": "x"}')
+
+        brain = self._brain(iter([]))
+        brain._complete = complete
+        with mock.patch.object(brain_module, "run_tool",
+                               lambda name, args: "something"),              contextlib.redirect_stdout(io.StringIO()):
+            said = brain.think("look everything up")
+        self.assertNotIn("too many steps", said)
+        self.assertIn("found", said)
+        self.assertLessEqual(rounds["n"], brain_module.TOOL_STEPS)
+        # Noticed while it ran: _trim_history clears the tool messages out
+        # before think() returns, so this has to be seen as it happens.
+        self.assertTrue(told_to_answer, "it was never told to stop fetching")
+
+    def test_past_the_budget_it_is_told_no_rather_than_disarmed(self):
+        """The budget is still enforced - the model may ask, and is refused."""
+        brain = self._brain(iter([self._calls("search_web", '{"query": "x"}'),
+                                  self._calls("search_web", '{"query": "y"}'),
+                                  self._says("Here it is.")]))
+        slow = iter([0.0, config.TOOL_BUDGET + 5])
+        with mock.patch.object(brain_module, "run_tool",
+                               lambda name, args: "something"),              mock.patch.object(brain_module.time, "time",
+                               lambda: next(slow, config.TOOL_BUDGET + 5)),              contextlib.redirect_stdout(io.StringIO()):
+            brain.think("look a lot of things up")
+        self.assertTrue(all(self.asked), self.asked)
+        refused = [m for m in brain.history if m.get("role") == "tool"]
+        self.assertTrue(any("taking too long" in m["content"] for m in refused))
+
+
 if __name__ == "__main__":
     unittest.main()

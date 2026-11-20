@@ -269,13 +269,25 @@ class Brain:
         spent = 0.0          # seconds the tools have taken between them
         try:
             for step in range(TOOL_STEPS):
-                # Sending the tools costs 1151 tokens of the 8000 a minute -
-                # measured against the server's own count, 1620 with them and
-                # 469 without. Once reo has been told to stop fetching, or has
-                # no steps left to fetch in, that is 1151 tokens spent on a
-                # list it is not allowed to use.
-                may_fetch = step < TOOL_STEPS - 1 and spent <= config.TOOL_BUDGET
-                resp = self._complete(with_tools=may_fetch)
+                # The tools go on every request, always.
+                #
+                # They are not cheap - 1151 tokens of the 8000 a minute,
+                # measured against the server's own count, 1620 with them
+                # against 469 without - so for a while reo left them out of
+                # the last step and of anything past the tool budget, on the
+                # grounds that it was not allowed to call one anyway.
+                #
+                # That was wrong, and measurably: asked five ordinary
+                # questions with no tools in the request, gpt-oss tried to
+                # call one twice, and groq answers that with 400 "Tool choice
+                # is none, but model called a tool". Which reaches him as
+                # "Something went wrong reaching my brain" - a line that is
+                # in his log from November. A third question came back empty.
+                # With the tools attached, nothing failed.
+                #
+                # The budget is still enforced, by refusing to run them and
+                # saying so, which is the next thing below.
+                resp = self._complete(with_tools=True)
                 msg = resp.choices[0].message
 
                 if not msg.tool_calls:
@@ -338,15 +350,23 @@ class Brain:
                 # for round after round: one reply in the log took 18.5s,
                 # which from where he is sitting is reo having died.
                 #
-                # Mostly this is reached by not being reached: past the budget
-                # the next request leaves the tools out, so there is nothing
-                # to call. It stays for the case where the model asks for one
-                # anyway, which it does. The calls still get an answer each -
-                # the history has to stay paired - it is just an answer that
-                # says to stop fetching.
-                if spent > config.TOOL_BUDGET:
-                    print(f"  [brain] {spent:.0f}s of tools is enough; answering with "
-                          f"what it has")
+                # This is how the budget is enforced, now that the tools go
+                # on every request: the model may still ask, and is simply
+                # told no. The calls get an answer each - the history has to
+                # stay paired - it is just an answer that says to stop
+                # fetching and speak.
+                # Running out of steps is the same situation as running out of
+                # budget, and it used to end in "Sorry, that took too many
+                # steps." - which is in his log three times, for "Claude
+                # app.", "So open it for me." and "Max level in this browser
+                # on the video I am playing". Giving him nothing after ten
+                # round trips is the worst of both. One step is held back so
+                # there is always a turn left in which to say something.
+                last_chance = step >= TOOL_STEPS - 2
+                if spent > config.TOOL_BUDGET or last_chance:
+                    why = ("that is ten rounds of tools" if last_chance
+                           else f"{spent:.0f}s of tools is enough")
+                    print(f"  [brain] {why}; answering with what it has")
                     results = ["That is taking too long. Answer now, out loud, "
                                "with what you already have." for _ in wanted]
                 else:

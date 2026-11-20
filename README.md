@@ -250,9 +250,9 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-That runs both suites: 476 tests, no API key needed.
+That runs both suites: 481 tests, no API key needed.
 
-`tests/test_reo.py` is the fast one - 461 tests, no microphone, no model. It
+`tests/test_reo.py` is the fast one - 466 tests, no microphone, no model. It
 covers the things that actually broke: exit phrases with punctuation inside
 them, noise transcriptions, emotion tags and repeated answers, tool failures,
 history trimming keeping tool calls paired, contractions reaching the fast
@@ -403,8 +403,12 @@ Three things keep it out of the way:
   file used to sit in the history and be resent on every request for the
   next four turns, so writing a game made the next four questions fail too.
   The file is written in full; what is kept is a note of its length.
-- Once reo has been told to stop fetching, the list of tools is left out of
-  the request, which is 1151 tokens it cannot use anyway.
+- The tools go on every request, even the ones reo is not allowed to use
+  them in. Leaving them off saves 1151 tokens and was tried; asked five
+  ordinary questions with no tools attached, gpt-oss tried to call one twice
+  and groq answered 400 "Tool choice is none, but model called a tool", which
+  reaches you as "Something went wrong reaching my brain". A third came back
+  empty. With the tools attached, nothing failed.
 
 ## Taking it back
 
