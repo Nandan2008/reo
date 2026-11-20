@@ -58,6 +58,16 @@ def _shut(stream) -> None:
             pass
 
 
+def speaking() -> bool:
+    """Is reo's own voice in the room? Imported late: speak imports config
+    and listen, and asking at the top would be a circle."""
+    try:
+        from .speak import talking
+    except Exception:
+        return False
+    return talking()
+
+
 class Microphone:
     """The input device, opened once and left running.
 
@@ -122,10 +132,17 @@ class Microphone:
                     print(f"  [listen] the microphone stopped ({e})")
                 break
             block = data.copy()
+            talking = speaking()
             with self._lock:
                 if self._live is not None:
                     self._live.put(block)
-                else:
+                elif not talking:
+                    # Reo's own voice is not kept. The ring is what the next
+                    # recording gets as pre-roll, and in hotkey mode the next
+                    # recording starts the moment reo stops talking - so
+                    # without this reo hands itself its own last words,
+                    # answers them, and does it again. He said "open youtube"
+                    # once and it then talked to itself for a dozen turns.
                     self._recent.append(block)
         _shut(stream)
         if self._stream is stream:

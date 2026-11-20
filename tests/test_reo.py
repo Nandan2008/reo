@@ -4631,5 +4631,138 @@ class TheWakeWordPath(unittest.TestCase):
                     after, said)
 
 
+class NotTalkingToItself(unittest.TestCase):
+    """He said "open youtube" once and then watched this, with no further
+    word from him at all:
+
+        REO  All set. Enjoy!
+        YOU  Enjoy!
+        REO  Thanks! You're welcome.
+        YOU  You're welcome
+        REO  Likewise.
+        YOU  Likewise
+        REO  Same here.
+        YOU  Same here
+
+    The microphone is held open and the hotkey stays on between commands, so
+    the ring that feeds the next recording its pre-roll was filling up with
+    reo's own voice while reo was speaking. Then it handed those words to
+    itself and answered them."""
+
+    HIS_LOOP = [("All set. Enjoy!", "Enjoy!"),
+                ("Thanks! You're welcome.", "You're welcome"),
+                ("Likewise.", "Likewise"),
+                ("Same here.", "Same here"),
+                ("Glad to be of help!", "Glad to be of help!"),
+                ("That's what I'm here for.", "That's what I'm here for!"),
+                ("Perfect!", "Perfect")]
+
+    # --- the ring, which is where it starts -------------------------------
+
+    def _microphone(self, talking):
+        mic = Microphone(keep_open=True)
+        self.addCleanup(mic.close)
+        block = np.zeros((listen.BLOCK_SAMPLES, 1), dtype=np.float32)
+        card = SimpleNamespace(read=lambda n: (block, False),
+                               start=lambda: None, stop=lambda: None,
+                               close=lambda: None)
+        with mock.patch.object(listen.sd, "InputStream", lambda **kw: card), \
+             mock.patch.object(listen, "speaking", talking):
+            self.assertTrue(mic.open())
+            deadline = time.time() + 2
+            while len(mic._recent) < 3 and time.time() < deadline:
+                time.sleep(0.01)
+            kept = len(mic._recent)
+            mic.close()
+        return kept
+
+    def test_the_ring_keeps_the_room(self):
+        self.assertGreater(self._microphone(lambda: False), 0)
+
+    def test_the_ring_keeps_nothing_while_reo_is_speaking(self):
+        """This is the fix. Everything else here is the second line."""
+        self.assertEqual(self._microphone(lambda: True), 0)
+
+    def test_speaking_says_so_while_it_speaks(self):
+        self.assertFalse(speak_module.talking(settle=0))
+        said = io.StringIO()
+        with mock.patch.object(config, "TTS_BACKEND", "pyttsx3"), \
+             mock.patch.object(speak_module, "_speak_pyttsx3",
+                               lambda *a, **kw: self.assertTrue(
+                                   speak_module.talking()) or False), \
+             contextlib.redirect_stdout(said):
+            speak_module.speak("[neutral] Hello.")
+        self.assertFalse(speak_module._talking.is_set())
+
+    def test_it_stays_true_for_a_moment_after(self):
+        """A little of the clip is still on its way out of the sound card
+        when the call to play it returns."""
+        speak_module._talking.clear()
+        speak_module._went_quiet = time.time()
+        self.assertTrue(speak_module.talking())
+        self.assertFalse(speak_module.talking(settle=0))
+
+    def test_what_it_last_said_is_remembered(self):
+        said = io.StringIO()
+        with mock.patch.object(config, "TTS_BACKEND", "pyttsx3"), \
+             mock.patch.object(speak_module, "_speak_pyttsx3",
+                               lambda *a, **kw: False), \
+             contextlib.redirect_stdout(said):
+            speak_module.speak("[happy] All set. Enjoy!")
+        self.assertEqual(speak_module.just_said(), "All set. Enjoy!")
+
+    # --- the second line --------------------------------------------------
+
+    def test_every_line_of_his_loop_is_caught(self):
+        for said, came_back in self.HIS_LOOP:
+            speak_module._last_words = said
+            speak_module._went_quiet = time.time()
+            self.assertTrue(main._my_own_voice(came_back),
+                            f"{said!r} -> {came_back!r}")
+
+    def test_what_he_actually_says_gets_through(self):
+        for said, he_said in [("Chrome is open.", "open youtube"),
+                              ("Lima.", "what about peru"),
+                              ("Should I overwrite it?", "yes"),
+                              ("I wrote game.py.", "run it"),
+                              ("All set. Enjoy!", "")]:
+            speak_module._last_words = said
+            speak_module._went_quiet = time.time()
+            self.assertFalse(main._my_own_voice(he_said),
+                             f"{said!r} -> {he_said!r}")
+
+    def test_it_stops_watching_after_a_while(self):
+        """Past the window it is probably really him. One turn of the loop he
+        saw took about six seconds, so the window is generous."""
+        speak_module._last_words = "Likewise."
+        speak_module._went_quiet = time.time() - main.ECHO_WINDOW - 1
+        self.assertFalse(main._my_own_voice("Likewise"))
+
+    def test_the_loop_does_not_answer_itself(self):
+        """End to end: reo speaks, the microphone hands those words straight
+        back, and the model must never be asked about them."""
+        answered = []
+        heard = iter(["Enjoy!", "You're welcome", "goodbye"])
+        listener = SimpleNamespace(listen=lambda **kw: next(heard), missed="")
+        toggle = SimpleNamespace(listening=True, presses=0,
+                                 wait_until_listening=lambda: None,
+                                 listen_now=lambda: None)
+        brain = SimpleNamespace(history=[], unanswered=None)
+
+        def handle(brain, text, *a, **kw):
+            answered.append(text)
+            return text != "goodbye"
+
+        speak_module._last_words = "All set. Enjoy! You're welcome."
+        speak_module._went_quiet = time.time()
+        said = io.StringIO()
+        with mock.patch.object(main, "handle", handle), \
+             mock.patch.object(main, "speak", lambda *a, **kw: None), \
+             contextlib.redirect_stdout(said):
+            main._loop(listener, brain, None, toggle, "Ctrl+Alt+R", None)
+        self.assertEqual(answered, ["goodbye"])
+        self.assertIn("my own voice", said.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

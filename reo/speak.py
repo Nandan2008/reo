@@ -29,6 +29,34 @@ TAG = re.compile(r"^\s*\[(\w+)]\s*")
 PLAY_GRACE = 5.0         # seconds past the clip length before giving up
 _orpheus_failed = False  # fall back quietly after the first failure
 
+# Whether reo's own voice is in the room. The microphone is held open and the
+# hotkey stays on between commands, so without this reo hears itself, answers
+# itself, and does it again - he said "open youtube" once and then watched it
+# hold a conversation with itself for a dozen turns:
+#
+#     REO  All set. Enjoy!
+#     YOU  Enjoy!
+#     REO  Thanks! You're welcome.
+#     YOU  You're welcome
+#     REO  Likewise.
+#
+# The settle is for the sound card: a little of the clip is still on its way
+# out when the call to play it returns.
+SETTLE = 0.2
+_talking = threading.Event()
+_went_quiet = 0.0
+_last_words = ""
+
+
+def talking(settle: float = SETTLE) -> bool:
+    """Is reo speaking, or was it a moment ago?"""
+    return _talking.is_set() or (time.time() - _went_quiet) < settle
+
+
+def just_said() -> str:
+    """The last thing reo said out loud, to recognise it coming back."""
+    return _last_words
+
 
 # Whatever bracketed tokens the reply opens with. Not just [word]: the model has
 # emitted "[emotion?]" and "[...]", and reo read them out loud.
@@ -449,14 +477,26 @@ def speak(text: str, ui=None, until=None) -> bool:
     reo talks over anyone who tries to interrupt, and a reply to a question it
     misheard has to be sat through to the end.
     """
-    global _orpheus_failed
-
     emotion, text = split_emotion(text)
     print(f"Reo ({emotion}): {text}" if emotion != "neutral" else f"Reo: {text}")
     if ui:
         ui.line("reo", text)
         ui.set_state("speaking")
 
+    # From here until the sound stops, the microphone must not keep any of
+    # this: it is held open, and the hotkey stays on between commands.
+    global _went_quiet, _last_words
+    _last_words = text
+    _talking.set()
+    try:
+        return _out_loud(text, emotion, ui, until)
+    finally:
+        _talking.clear()
+        _went_quiet = time.time()
+
+
+def _out_loud(text: str, emotion: str, ui, until) -> bool:
+    global _orpheus_failed
     if config.TTS_BACKEND == "orpheus" and not _orpheus_failed:
         try:
             return _speak_orpheus(text, until)

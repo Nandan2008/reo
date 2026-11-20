@@ -250,9 +250,9 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-That runs both suites: 461 tests, no API key needed.
+That runs both suites: 470 tests, no API key needed.
 
-`tests/test_reo.py` is the fast one - 446 tests, no microphone, no model. It
+`tests/test_reo.py` is the fast one - 455 tests, no microphone, no model. It
 covers the things that actually broke: exit phrases with punctuation inside
 them, noise transcriptions, emotion tags and repeated answers, tool failures,
 history trimming keeping tool calls paired, contractions reaching the fast
@@ -672,6 +672,48 @@ compositing for the glow instead.
 Everything else - the voice detection, the pre-roll, transcribing inside the
 pause, the provider pool, the workspace, undo - is this project's own, and
 most of it exists because something measurable was wrong.
+
+## Not answering itself
+
+He said "open youtube", once, and said nothing else at all. Then he watched
+this:
+
+```
+REO  All set. Enjoy!
+YOU  Enjoy!
+REO  Thanks! You're welcome.
+YOU  You're welcome
+REO  Likewise.
+YOU  Likewise
+REO  Same here.
+YOU  Same here
+REO  Glad to be of help!
+YOU  Glad to be of help!
+```
+
+Reo was hearing its own voice and answering it, around and around, until it
+had spent eighteen thousand tokens and fallen back to the model on the
+laptop.
+
+The microphone is held open, because opening one costs half a second. The
+moment before the key press is kept, because that half second used to be
+sliced off the front of the first word. And in hotkey mode the key stays on
+between commands, because having to press it for every sentence is worse.
+Each of those is right on its own. Together they meant the ring that feeds
+the next recording its pre-roll was filling up with reo's own voice while reo
+was speaking - and then handing it back as though he had said it.
+
+**The fix is that the ring keeps nothing while reo is talking.** The speaker
+and the microphone are the same loop; reo simply stops writing to it while
+its own voice is in the room, plus 0.2s for what is still on its way out of
+the sound card.
+
+**The second line is recognising its own words coming back.** Every line in
+that transcript is a piece of the line above it, so a reply that reo just
+said is ignored rather than answered - for fifteen seconds, which is longer
+than a turn of that loop took. What he actually says gets through: "open
+youtube" after "Chrome is open.", "yes" after "Should I overwrite it?",
+"run it" after "I wrote game.py."
 
 ## When something goes wrong
 

@@ -36,6 +36,40 @@ HEARING_CHECK = {
 }
 
 
+# How long after reo stops talking its own voice might still come back. One
+# turn of the loop he saw took about six seconds, so this is generous on
+# purpose: the cost of being wrong is one ignored sentence, and the cost of
+# being right is not holding a conversation with itself.
+ECHO_WINDOW = 15.0
+
+
+def _my_own_voice(text: str) -> bool:
+    """Did the microphone just hand back what reo said a moment ago?
+
+    He said "open youtube" and nothing else, and then watched this:
+
+        REO  All set. Enjoy!
+        YOU  Enjoy!
+        REO  Thanks! You're welcome.
+        YOU  You're welcome
+        REO  Likewise.
+        YOU  Likewise
+
+    Every one of those is a piece of the line above it. The ring no longer
+    keeps reo's own voice, which stops it at the source; this is the second
+    line, for an echo that arrives late or comes back off a wall.
+    """
+    from . import speak as voice
+
+    heard = normalize(text)
+    said = normalize(voice.just_said())
+    if not heard or not said:
+        return False
+    if time.time() - voice._went_quiet > ECHO_WINDOW:
+        return False
+    return heard in said
+
+
 def _tee_to_logfile():
     """Started from the Startup folder there is no console to read, so keep a log.
 
@@ -409,6 +443,13 @@ def _loop(listener, brain, waker, toggle, combination, ui):
             if ui:
                 ui.line("note", "the microphone failed; press the key and try again")
             text = ""
+
+        if _my_own_voice(text):
+            note = "(that was my own voice coming back - ignoring it)"
+            print(f"  {note}")
+            if ui:
+                ui.line("note", note)
+            continue
 
         if not is_speech(text):
             # A muted microphone, a silent room, a mumble and whisper
