@@ -43,6 +43,29 @@ HEARING_CHECK = {
 ECHO_WINDOW = 15.0
 
 
+# A real word, said out loud, puts far more than this through the
+# microphone - ordinary speech here peaks near 0.06 against a room's 0.0012.
+# SPEECH_FLOOR sits between them, measured on his own laptop.
+SURELY_SPOKE = 0.3          # seconds of voice behind an irreversible word
+
+
+def _really_said(listener, text: str) -> bool:
+    """Was there actually a voice behind that, or did whisper invent it?
+
+    Only asked about ending the session, because that is the one thing that
+    cannot be taken back.
+    """
+    from . import audio as au
+
+    level = getattr(listener, "last_level", 0.0)
+    voice = getattr(listener, "last_voice", 0.0)
+    if level >= config.SPEECH_FLOOR and voice >= SURELY_SPOKE:
+        return True
+    # More than one word, and not one of whisper's stock answers, is nobody's
+    # hallucination - "stop listening" is two words and a real instruction.
+    return not au.from_silence(text) and len(normalize(text).split()) > 1
+
+
 def _my_own_voice(text: str) -> bool:
     """Did the microphone just hand back what reo said a moment ago?
 
@@ -261,6 +284,15 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
         return True
 
     if normalize(text) in EXIT_PHRASES:
+        # The one irreversible thing reo does by voice, so it wants more than
+        # a single word on trust. "Bye" arrived out of a silent room, from
+        # whisper rather than from him, and ended a session he was using.
+        if listener is not None and not _really_said(listener, text):
+            note = "(I thought I heard goodbye, but there was nothing there)"
+            print(f"  {note}")
+            if ui:
+                ui.line("note", note)
+            return True
         speak("Goodbye.", ui)
         return False
 

@@ -4764,5 +4764,62 @@ class NotTalkingToItself(unittest.TestCase):
         self.assertIn("my own voice", said.getvalue())
 
 
+class WhisperSayingGoodbyeForHim(unittest.TestCase):
+    """He did not say bye.
+
+        You: Search MBD in the YouTube search bar.
+        Reo: Done. Results are showing.
+        You: Bye
+        Reo: Goodbye.
+
+    "Bye" is one of the handful of things whisper emits when handed a quiet
+    room, and it is also an exit phrase, so an invented word ended a session
+    he was in the middle of using."""
+
+    def _ask(self, text, level, voice):
+        listener = SimpleNamespace(last_level=level, last_voice=voice,
+                                   transcribe_seconds=0.0, heard_by="groq",
+                                   cut_short=0.0)
+        brain = SimpleNamespace(history=[], unanswered=None,
+                                think=mock.Mock(return_value="x"))
+        with mock.patch.object(main, "speak", lambda *a, **kw: None),              contextlib.redirect_stdout(io.StringIO()):
+            return main.handle(brain, text, None, 0.0, listener, None)
+
+    def test_an_invented_goodbye_does_not_end_the_session(self):
+        for text in ["Bye", "goodbye", "quit", "exit"]:
+            self.assertTrue(self._ask(text, 0.002, 0.1), text)
+
+    def test_him_actually_saying_it_still_works(self):
+        for text in ["Bye", "goodbye", "goodbye reo", "stop listening"]:
+            self.assertFalse(self._ask(text, 0.08, 0.5), text)
+
+    def test_two_words_is_nobody_s_hallucination(self):
+        """"stop listening" is a real instruction, quietly said."""
+        self.assertFalse(self._ask("stop listening", 0.002, 0.1))
+
+    def test_whisper_s_stock_answers_are_known(self):
+        for stock in ["Bye", "bye.", "Thank you.", "you",
+                      "Thanks for watching!", "Okay", "Music"]:
+            self.assertTrue(au_mod.from_silence(stock), stock)
+
+    def test_what_he_really_says_is_not_mistaken_for_one(self):
+        for real in ["bye reo", "thank you for that", "open youtube",
+                     "okay open chrome", "you are my baby"]:
+            self.assertFalse(au_mod.from_silence(real), real)
+
+    def test_a_silent_clip_never_reaches_whisper_now(self):
+        """The floor exists for exactly this and was being skipped whenever
+        the voice detector was working - but silero says where speech starts
+        and stops, not whether there was ever anything there."""
+        # No voice detector is set up here on purpose: the floor no longer
+        # asks whether there is one.
+        ear = Listener.__new__(Listener)
+        ear.missed = ""
+        quiet = np.full(16000, 0.001, dtype=np.float32)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ear._transcribe(quiet), "")
+        self.assertEqual(ear.missed, "quiet")
+
+
 if __name__ == "__main__":
     unittest.main()

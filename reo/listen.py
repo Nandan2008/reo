@@ -488,11 +488,16 @@ class Listener:
 
     def _transcribe(self, raw) -> str:
         """Audio in, words out. Everything that is not words is dropped here."""
-        # Whisper does not return nothing for silence - it invents. Only needed
-        # when the voice detector is missing; otherwise this was already decided
-        # block by block while recording.
-        if not self.voice.ready and not au.has_speech(raw, config.SPEECH_FLOOR):
+        # Whisper does not return nothing for silence - it invents. This used
+        # to be skipped whenever the voice detector was working, on the
+        # grounds that silence had already been ruled out block by block.
+        # It had not: silero says where speech starts and stops, not whether
+        # there was ever anything there, and a sharp noise is enough for it.
+        # So a near-silent clip still reached whisper, which answered "Bye" -
+        # and bye is an exit phrase, so reo said goodbye and quit.
+        if not au.has_speech(raw, config.SPEECH_FLOOR):
             print("  (only room noise)")
+            self.missed = "quiet"
             return ""
         clean = au.normalize(raw)
         text = self._hosted(clean) if config.HEARING == "hosted" else None

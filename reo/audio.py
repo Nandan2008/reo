@@ -61,6 +61,28 @@ def _says_twice(words: list[str], size: int, times: int = 3) -> bool:
     return False
 
 
+# What whisper emits when handed a quiet room. These are not guesses: they
+# are the handful of phrases it falls back on, and two of them - "bye" and
+# "goodbye" - are how reo is told to stop. One of them ended a session he was
+# in the middle of using.
+#
+# Only ever applied to a clip with no real voice in it, because all of these
+# are things a person genuinely says.
+FROM_SILENCE = {
+    "bye", "goodbye", "bye bye", "thank you", "thanks", "thank you very much",
+    "thanks for watching", "thanks for watching!", "you", "oh", "um", "uh",
+    "please subscribe", "subscribe", "the end", "okay", "ok", "so",
+    "amara org", "subtitles by the amara org community", "transcription by",
+    "i'm sorry", "music", "applause", "silence", "blank audio",
+}
+
+
+def from_silence(text: str) -> bool:
+    """Is this one of whisper's stock answers to having heard nothing?"""
+    plain = "".join(c if c.isalnum() or c in " '" else " " for c in text.lower())
+    return " ".join(plain.split()) in FROM_SILENCE
+
+
 def looks_hallucinated(text: str) -> bool:
     """Whisper looping rather than you talking.
 

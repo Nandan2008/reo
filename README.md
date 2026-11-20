@@ -250,9 +250,9 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-That runs both suites: 470 tests, no API key needed.
+That runs both suites: 476 tests, no API key needed.
 
-`tests/test_reo.py` is the fast one - 455 tests, no microphone, no model. It
+`tests/test_reo.py` is the fast one - 461 tests, no microphone, no model. It
 covers the things that actually broke: exit phrases with punctuation inside
 them, noise transcriptions, emotion tags and repeated answers, tool failures,
 history trimming keeping tool calls paired, contractions reaching the fast
@@ -714,6 +714,39 @@ said is ignored rather than answered - for fifteen seconds, which is longer
 than a turn of that loop took. What he actually says gets through: "open
 youtube" after "Chrome is open.", "yes" after "Should I overwrite it?",
 "run it" after "I wrote game.py."
+
+## Not quitting because whisper said so
+
+He did not say bye:
+
+```
+You: Search MBD in the YouTube search bar.
+Reo: Done. Results are showing.
+You: Bye
+Reo: Goodbye.
+===== reo stopped: you said goodbye =====
+```
+
+"Bye" is one of the handful of phrases whisper falls back on when handed a
+quiet room - with "Thank you", "you", "Okay" and "Thanks for watching" - and
+it is also how reo is told to stop. So an invented word ended a session he
+was in the middle of using.
+
+Two things let it through.
+
+**The loudness floor was being skipped.** It exists for exactly this - the
+comment above it reads "whisper does not return nothing for silence, it
+invents" - but it only ran when the voice detector was missing, on the
+grounds that silence had already been ruled out block by block. It had not.
+Silero says where speech starts and stops, not whether there was ever
+anything there, and a sharp noise is enough to start it. The floor is
+unconditional now.
+
+**And quitting took a single word on trust.** It is the one thing reo does by
+voice that cannot be taken back, so it now wants a voice behind it: either
+the recording was loud enough and had real speech in it, or the phrase is
+more than one word and not one of whisper's stock answers. "Goodbye reo" and
+"stop listening" still work whispered. "Bye" out of a silent room does not.
 
 ## When something goes wrong
 
