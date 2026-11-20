@@ -4312,8 +4312,10 @@ class AnyoneCanInstallIt(unittest.TestCase):
         self.assertTrue((self.ROOT / "install.ps1").exists())
 
     def test_the_example_env_exists_because_two_scripts_copy_it(self):
-        """It did not. setup.bat ran `copy .env.example .env >nul`, which
-        failed silently, and set-key.ps1 fell back to an empty file."""
+        """setup.bat copies it and set-key.ps1 falls back to it, and both do
+        so silently - `copy .env.example .env >nul` - so losing this file
+        would break a stranger's install without saying anything. It is a
+        dotfile, which is exactly how it gets lost."""
         example = self.ROOT / ".env.example"
         self.assertTrue(example.exists())
         self.assertIn("LLM_API_KEY", example.read_text(encoding="utf-8"))
