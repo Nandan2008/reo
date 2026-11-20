@@ -1,5 +1,6 @@
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -36,7 +37,12 @@ HEARING_CHECK = {
 
 
 def _tee_to_logfile():
-    """Started from the Startup folder there is no console to read, so keep a log."""
+    """Started from the Startup folder there is no console to read, so keep a log.
+
+    stderr goes in too. It did not, and that is why every crash in his log
+    looks like a clean startup followed by nothing: a traceback goes to
+    stderr, the window closes, and the log never heard about it.
+    """
     path = Path(__file__).resolve().parent.parent / "reo.log"
     try:
         log = open(path, "a", encoding="utf-8", buffering=1)
@@ -45,16 +51,45 @@ def _tee_to_logfile():
     log.write(f"\n===== started {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
 
     class Tee:
+        def __init__(self, also):
+            self.also = also
+
         def write(self, text):
-            sys.__stdout__.write(text)
+            if self.also is not None:
+                self.also.write(text)
             log.write(text)
             return len(text)
 
         def flush(self):
-            sys.__stdout__.flush()
+            if self.also is not None:
+                self.also.flush()
             log.flush()
 
-    sys.stdout = Tee()
+    sys.stdout = Tee(sys.__stdout__)
+    sys.stderr = Tee(sys.__stderr__)
+
+
+def _log_crashes() -> None:
+    """Write down anything that gets all the way out, from any thread.
+
+    Without this a crash in the barge-in watcher or the microphone pump
+    printed to a stderr nobody was reading and the thread died on the spot -
+    which looks like reo going deaf or mute rather than like a bug.
+    """
+    def fell_over(kind, value, where, thread=None):
+        who = f" in {thread}" if thread else ""
+        print(f"\n  [crash]{who} {kind.__name__}: {value}")
+        traceback.print_exception(kind, value, where)
+
+    sys.excepthook = fell_over
+
+    def in_a_thread(args):
+        if args.exc_type is SystemExit:
+            return
+        fell_over(args.exc_type, args.exc_value, args.exc_traceback,
+                  getattr(args.thread, "name", "a thread"))
+
+    threading.excepthook = in_a_thread
 
 
 def already_running() -> int:
@@ -253,7 +288,9 @@ def handle(brain, text: str, ui=None, heard_in: float = 0.0, listener=None,
 def main():
     # Windows consoles are cp1252; replies often hold characters it cannot encode
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     _tee_to_logfile()
+    _log_crashes()
 
     keys = [p for p in providers.build() if p.key != "your-groq-key-here"]
     if not keys:
@@ -328,6 +365,7 @@ def main():
 
 def _loop(listener, brain, waker, toggle, combination, ui):
     speak("Reo online.", ui)
+    why = "the window was closed"
 
     while not (ui and ui.closed):
         heard_in = 0.0
@@ -362,6 +400,7 @@ def _loop(listener, brain, waker, toggle, combination, ui):
                     ui.set_state("listening")
                 text = listener.listen()
         except (KeyboardInterrupt, EOFError):
+            why = "Ctrl+C"
             break
         except Exception as e:
             # A microphone that disappears, a driver that hiccups: say so and
@@ -381,8 +420,26 @@ def _loop(listener, brain, waker, toggle, combination, ui):
                 ui.line("note", note)
             continue
 
-        if not handle(brain, text, ui, heard_in, listener, toggle):
+        try:
+            keep_going = handle(brain, text, ui, heard_in, listener, toggle)
+        except Exception as e:
+            # handle() was outside this, so anything it raised - the voice,
+            # the window, a tool with a surprise in it - ended the session
+            # and took the traceback to an unread stderr with it.
+            print(f"  [error] that one fell over: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            if ui:
+                ui.line("note", "something went wrong answering that - still here")
+            keep_going = True
+        if not keep_going:
+            why = "you said goodbye"
             break
+    else:
+        why = "the window was closed"
+
+    # The log used to simply stop, which told him nothing about whether reo
+    # had been closed or had fallen over.
+    print(f"\n===== reo stopped: {why} =====")
 
 
 if __name__ == "__main__":

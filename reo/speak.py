@@ -457,4 +457,15 @@ def speak(text: str, ui=None, until=None) -> bool:
             _orpheus_failed = True
             print(f"  [voice] Orpheus unavailable ({e}); using the offline voice.")
 
-    return _speak_pyttsx3(text, emotion, until)
+    try:
+        return _speak_pyttsx3(text, emotion, until)
+    except Exception as e:
+        # pyttsx3 talks to SAPI over COM, which fails on Windows for its own
+        # reasons, and this was unguarded all the way up: a voice that fell
+        # over in the middle of answering ended the whole session, with the
+        # traceback going to a stderr nobody was reading. Reo is allowed to
+        # lose its voice; it is not allowed to die of it.
+        print(f"  [voice] could not speak ({type(e).__name__}: {e})")
+        if ui:
+            ui.line("note", "(could not speak that out loud)")
+        return False

@@ -55,6 +55,51 @@ class Session:
         with self._lock:
             return self._average()
 
+    def how_long_i_take(self) -> str:
+        """Where this session's time went, out loud.
+
+        Asked "why are you slow", reo used to go and ask a model, which knows
+        nothing about it. It is the one thing in the world reo has first-hand
+        knowledge of, and it was already counting it for the window's panel.
+
+        The voice note is the actionable part: the hosted voice measured at
+        +1.15s a reply against the offline one on the same five sentences,
+        because Orpheus speaks more slowly, not because of the network. That
+        is the one lever here he can actually pull.
+        """
+        from . import config
+
+        with self._lock:
+            replies = self.replies
+            heard, thought, spoke = self.heard, self.thought, self.spoke
+            free = self.skipped_model
+        if not replies:
+            return "You have not asked me anything yet, so I have nothing to compare."
+
+        parts = {"listening": heard / replies, "thinking": thought / replies,
+                 "speaking": spoke / replies}
+        worst = max(parts, key=parts.get)
+        # The breakdown is printed rather than read out. Spoken in full it
+        # ran to about twenty-five seconds, which is a strange thing to sit
+        # through from something being asked why it is slow.
+        print(f"  [time] over {replies} repl{'y' if replies == 1 else 'ies'}: "
+              f"heard {parts['listening']:.1f}s, thought {parts['thinking']:.1f}s, "
+              f"spoke {parts['speaking']:.1f}s, "
+              f"total {(heard + thought + spoke) / replies:.1f}s"
+              + (f", {free} without the model" if free else ""))
+        if config.TTS_BACKEND == "orpheus":
+            print("  [time] the hosted voice costs about 1.15s of that per "
+                  "reply - measured against the offline one on the same five "
+                  "sentences. Set REO_TTS=pyttsx3 in .env for the quick one.")
+
+        said = (f"About {(heard + thought + spoke) / replies:.0f} seconds a "
+                f"reply, and most of that is {worst}.")
+        if worst == "speaking" and config.TTS_BACKEND == "orpheus":
+            said += " My voice is the hosted one; the offline one is quicker."
+        elif worst == "listening":
+            said += " That is mostly you talking, which I cannot speed up."
+        return said
+
     def rows(self):
         """(label, value) pairs for the SYSTEM panel."""
         with self._lock:

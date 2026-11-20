@@ -1,5 +1,7 @@
 """Offline tests: no microphone, no API key, no network."""
 import datetime
+import contextlib
+import sys
 import io
 import json
 import re
@@ -19,6 +21,7 @@ from openai import APIConnectionError, APIStatusError, RateLimitError
 from reo import apps, config, fastpath, providers, tools
 from reo import memory as memory_module
 from reo import brain as brain_module
+from reo import stats as stats_module
 from reo import chats as chatsmod
 from reo.chats import Chats
 from reo import pointer
@@ -4130,6 +4133,233 @@ class WhenNothingWasSaidThatDay(unittest.TestCase):
         self._chats(None)
         self.assertEqual(fastpath.answer("what did we talk about yesterday"),
                          "Nothing was said yesterday.")
+
+
+class NotDyingSilently(unittest.TestCase):
+    """Every recent session in his log ends on "[Press Ctrl+Alt+R to start
+    listening]" with nothing after it - no goodbye, no error, no traceback.
+    Four things made that possible, and this is each of them."""
+
+    def test_the_log_gets_stderr_too(self):
+        """A traceback goes to stderr. Only stdout was teed, so a crash left
+        the log looking like a clean startup and nothing else."""
+        home = Path(tempfile.mkdtemp(prefix="reo-log-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        was_out, was_err = sys.stdout, sys.stderr
+        self.addCleanup(lambda: (setattr(sys, "stdout", was_out),
+                                 setattr(sys, "stderr", was_err)))
+        with mock.patch.object(main, "__file__", str(home / "reo" / "__main__.py")):
+            (home / "reo").mkdir()
+            main._tee_to_logfile()
+            print("this went to stdout")
+            print("this went to stderr", file=sys.stderr)
+        sys.stdout, sys.stderr = was_out, was_err
+        written = (home / "reo.log").read_text(encoding="utf-8")
+        self.assertIn("this went to stdout", written)
+        self.assertIn("this went to stderr", written)
+
+    def test_a_crash_in_a_thread_is_written_down(self):
+        """Without this a crash in the barge-in watcher or the microphone
+        pump printed to a stderr nobody was reading and the thread died on
+        the spot - which looks like reo going deaf, not like a bug."""
+        was = sys.excepthook, threading.excepthook
+        self.addCleanup(lambda: (setattr(sys, "excepthook", was[0]),
+                                 setattr(threading, "excepthook", was[1])))
+        said = io.StringIO()
+        main._log_crashes()
+        with contextlib.redirect_stdout(said), contextlib.redirect_stderr(said):
+            thread = threading.Thread(target=lambda: 1 / 0, name="barge-in")
+            thread.start()
+            thread.join()
+        written = said.getvalue()
+        self.assertIn("[crash]", written)
+        self.assertIn("barge-in", written)
+        self.assertIn("ZeroDivisionError", written)
+
+    def test_one_bad_reply_does_not_end_the_session(self):
+        """handle() was called outside the loop's try/except, so anything it
+        raised ended the session and took the traceback with it."""
+        brain = SimpleNamespace(history=[], unanswered=None)
+        listener = SimpleNamespace(
+            listen=mock.Mock(side_effect=["say something", "goodbye"]),
+            missed="")
+        toggle = SimpleNamespace(listening=True, presses=0,
+                                 wait_until_listening=lambda: None,
+                                 listen_now=lambda: None)
+        blew_up = iter([RuntimeError("the voice fell over"), None])
+
+        def handle(*a, **kw):
+            boom = next(blew_up)
+            if boom:
+                raise boom
+            return False                     # second time: goodbye
+
+        said = io.StringIO()
+        with mock.patch.object(main, "handle", handle), \
+             mock.patch.object(main, "speak", lambda *a, **kw: None), \
+             contextlib.redirect_stdout(said):
+            main._loop(listener, brain, None, toggle, "Ctrl+Alt+R", None)
+        self.assertEqual(listener.listen.call_count, 2, "it gave up after the first")
+        self.assertIn("fell over", said.getvalue())
+
+    def test_losing_its_voice_is_not_fatal(self):
+        """pyttsx3 talks to SAPI over COM, which fails on Windows for its own
+        reasons, and this was unguarded all the way up to the main loop."""
+        said = io.StringIO()
+        # His .env sets REO_TTS=orpheus, so without pinning the backend this
+        # went out to the network and said "Hello." out loud on his laptop.
+        with mock.patch.object(config, "TTS_BACKEND", "pyttsx3"), \
+             mock.patch.object(speak_module, "_speak_pyttsx3",
+                               side_effect=OSError("COM said no")), \
+             contextlib.redirect_stdout(said):
+            cut = speak_module.speak("[neutral] Hello.")
+        self.assertFalse(cut)
+        self.assertIn("could not speak", said.getvalue())
+
+    def test_the_log_says_why_it_stopped(self):
+        """It used to simply stop, which told him nothing about whether reo
+        had been closed or had fallen over."""
+        brain = SimpleNamespace(history=[], unanswered=None)
+        listener = SimpleNamespace(listen=mock.Mock(return_value="goodbye"),
+                                   missed="")
+        toggle = SimpleNamespace(listening=True, presses=0,
+                                 wait_until_listening=lambda: None,
+                                 listen_now=lambda: None)
+        said = io.StringIO()
+        with mock.patch.object(main, "handle", lambda *a, **kw: False), \
+             mock.patch.object(main, "speak", lambda *a, **kw: None), \
+             contextlib.redirect_stdout(said):
+            main._loop(listener, brain, None, toggle, "Ctrl+Alt+R", None)
+        self.assertIn("reo stopped: you said goodbye", said.getvalue())
+
+    def test_a_closed_window_says_so_as_well(self):
+        brain = SimpleNamespace(history=[], unanswered=None)
+        said = io.StringIO()
+        ui = SimpleNamespace(closed=True, set_state=lambda s: None,
+                             line=lambda k, t: None)
+        with mock.patch.object(main, "speak", lambda *a, **kw: None), \
+             contextlib.redirect_stdout(said):
+            main._loop(SimpleNamespace(), brain, None, None, "", ui)
+        self.assertIn("reo stopped: the window was closed", said.getvalue())
+
+
+class AskingWhereTheTimeGoes(unittest.TestCase):
+    """Asked "why are you slow", reo went and asked a model - which knows
+    nothing whatever about reo's timings, while reo had been counting them
+    all along for the window's panel."""
+
+    def _session(self):
+        fresh = stats_module.Session()
+        patch = mock.patch.object(stats_module, "session", fresh)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return fresh
+
+    def test_before_anything_is_asked_it_says_so(self):
+        self._session()
+        self.assertIn("not asked me anything",
+                      stats_module.session.how_long_i_take())
+
+    def test_it_names_the_part_that_is_worst(self):
+        session = self._session()
+        session.add_reply(6.0, 1.0, 1.0)
+        self.assertIn("listening", session.how_long_i_take())
+        other = self._session()
+        other.add_reply(1.0, 1.0, 6.0)
+        self.assertIn("speaking", other.how_long_i_take())
+
+    def test_the_spoken_answer_stays_short(self):
+        """Spoken in full the breakdown ran to about twenty-five seconds,
+        which is a strange thing to sit through from something being asked
+        why it is slow. The detail is printed; the answer is said."""
+        session = self._session()
+        for _ in range(5):
+            session.add_reply(4.5, 1.5, 3.2)
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            spoken = session.how_long_i_take()
+        self.assertLess(len(spoken), 160, spoken)
+        self.assertLessEqual(len(re.findall(r"[.!?]", spoken)), 2, spoken)
+        # and the numbers are still written down where he can read them
+        self.assertIn("heard", said.getvalue())
+        self.assertIn("spoke", said.getvalue())
+
+    def test_the_question_never_reaches_the_model(self):
+        session = self._session()
+        session.add_reply(4.5, 1.5, 3.2)
+        for asked in ["why are you slow", "how fast are you",
+                      "whats taking so long", "how long do you take",
+                      "where does the time go", "how slow are you"]:
+            with contextlib.redirect_stdout(io.StringIO()):
+                answer = fastpath.answer(asked)
+            self.assertIsNotNone(answer, asked)
+            self.assertIn("seconds", answer, asked)
+
+    def test_a_different_question_about_time_still_goes_where_it_should(self):
+        self._session()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertIn("It is", fastpath.answer("what time is it"))
+            self.assertIsNone(fastpath.answer("how long is a piece of string"))
+
+
+class AnyoneCanInstallIt(unittest.TestCase):
+    """He asked for one file anyone could install reo from. These are the
+    things that would quietly break it for a stranger."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def test_there_is_an_installer(self):
+        self.assertTrue((self.ROOT / "install.ps1").exists())
+
+    def test_the_example_env_exists_because_two_scripts_copy_it(self):
+        """It did not. setup.bat ran `copy .env.example .env >nul`, which
+        failed silently, and set-key.ps1 fell back to an empty file."""
+        example = self.ROOT / ".env.example"
+        self.assertTrue(example.exists())
+        self.assertIn("LLM_API_KEY", example.read_text(encoding="utf-8"))
+
+    def test_the_example_env_holds_no_real_key(self):
+        text = (self.ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertNotIn("gsk_", text)
+        self.assertIn("your-groq-key-here", text)
+
+    def test_nothing_asks_for_the_key_where_it_can_be_seen(self):
+        """setup.bat used `set /p`, which echoes what is typed, leaves it in
+        the window's history and puts it in an environment variable. His key
+        is his to type, and only into a secure prompt."""
+        for script in ("setup.bat", "install.ps1"):
+            text = (self.ROOT / script).read_text(encoding="utf-8")
+            # Comments out: setup.bat explains in a `rem` why it does not use
+            # `set /p`, and that explanation is not an echoed key.
+            code = "\n".join(
+                line for line in text.lower().splitlines()
+                if not line.strip().startswith(("rem ", "#", "::")))
+            self.assertNotIn("set /p", code, script)
+            self.assertIn("set-key.ps1", text, script)
+
+    def test_the_installer_can_run_with_nobody_there(self):
+        """Which is also how it gets tested."""
+        text = (self.ROOT / "install.ps1").read_text(encoding="utf-8")
+        self.assertIn("$Unattended", text)
+        self.assertIn("function Ask", text)
+        # every question goes through Ask, or -Unattended is half-honoured
+        self.assertNotRegex(text, r"(?m)^\s*(?!.*function).*\(Read-Host\)\s*-")
+
+    def test_the_installer_does_not_hide_a_failed_install(self):
+        """--quiet on the requirements step would hide the one red line that
+        matters."""
+        text = (self.ROOT / "install.ps1").read_text(encoding="utf-8")
+        requirements = [l for l in text.splitlines() if "-r requirements.txt" in l]
+        self.assertTrue(requirements)
+        for line in requirements:
+            self.assertNotIn("--quiet", line)
+
+    def test_the_pinned_python_matches_what_the_scripts_look_for(self):
+        """requirements.txt was resolved against 3.14 while setup.bat looked
+        for 3.12 and 3.11 only."""
+        for script in ("setup.bat", "install.ps1"):
+            text = (self.ROOT / script).read_text(encoding="utf-8")
+            self.assertIn("3.14", text, script)
 
 
 if __name__ == "__main__":

@@ -7,18 +7,17 @@ echo         reo setup
 echo ==============================
 echo.
 
-rem --- Find Python 3.12 / 3.11 ---
+rem --- Find Python: newest first, since the pins were resolved against 3.14 ---
 set "PY="
-py -3.12 --version >nul 2>&1 && set "PY=py -3.12"
-if not defined PY (
-  py -3.11 --version >nul 2>&1 && set "PY=py -3.11"
+for %%v in (3.14 3.13 3.12 3.11) do (
+  if not defined PY py -%%v --version >nul 2>&1 && set "PY=py -%%v"
 )
 if not defined PY (
   python --version >nul 2>&1 && set "PY=python"
 )
 if not defined PY (
   echo Python is not installed.
-  echo Opening the download page. Install Python 3.12 and TICK "Add python.exe to PATH".
+  echo Opening the download page. Install Python and TICK "Add python.exe to PATH".
   echo Then run setup.bat again.
   start https://www.python.org/downloads/release/python-3128/
   goto :end
@@ -42,13 +41,15 @@ echo [2/3] Installing packages - this can take a few minutes...
 echo.
 
 rem --- API key ---
+rem Handed to set-key.ps1 on purpose. "set /p" echoes the key on screen,
+rem leaves it in this window's history and puts it in an environment
+rem variable; set-key.ps1 reads it as a secure string and types it straight
+rem into .env.
 if not exist ".env" (
   echo [3/3] Setting up your free Groq API key.
   echo Opening console.groq.com/keys - sign in, click "Create API Key", copy it.
   start https://console.groq.com/keys
-  copy .env.example .env >nul
-  set /p "KEY=Paste your Groq API key here and press Enter: "
-  powershell -NoProfile -Command "(Get-Content .env) -replace 'your-groq-key-here', $env:KEY | Set-Content .env"
+  powershell -NoProfile -ExecutionPolicy Bypass -File set-key.ps1
 ) else (
   echo [3/3] .env already exists, keeping your key.
 )
@@ -61,6 +62,6 @@ goto :eof
 
 :fail
 echo.
-echo Setup failed. Copy the red error text above and send it to Claude.
+echo Setup failed. The first red line above is the one that matters.
 :end
 pause

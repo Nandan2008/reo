@@ -56,6 +56,17 @@ def _tidy(value: float) -> str:
 
 # --- the answers ------------------------------------------------------------
 
+def _how_long(_):
+    """Where this session's time went. The one thing reo knows first-hand.
+
+    Asked "why are you slow" it used to go and ask a model, which knows
+    nothing whatever about reo's timings - while reo had been counting them
+    all along for the window's panel.
+    """
+    from .stats import session
+    return session.how_long_i_take()
+
+
 def _time(_):
     return datetime.datetime.now().strftime("It is %I:%M %p.").replace(" 0", " ")
 
@@ -371,6 +382,10 @@ ABOUT = [(pattern, lambda m, answer=answer: answer())
 
 # Ordered; the first whole-utterance match wins.
 ROUTES = [
+    (r"(how (fast|slow|quick) are you|how (fast|slow) do you (answer|reply)"
+     r"|why are you (so )?slow|what(s| is) taking (so long|you so long)"
+     r"|where does the time go|how long do you take"
+     r"|whats your (speed|latency|lag)|how is your speed)", _how_long),
     (r"(what(s| is)? (the )?)?time( is it)?( now| right now| please)?", _time),
     (r"(what(s| is)? (the |todays? )?)?(date|day)( is it)?( today)?", _date),
     (r"(what(s| is)? (my |the )?)?battery( level| percentage| status)?"

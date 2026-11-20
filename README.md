@@ -1,13 +1,43 @@
 # reo
 
-Voice assistant for Windows. Day 1: push-to-talk voice loop with a free open-source LLM (gpt-oss on Groq) + basic tools.
+A voice assistant that runs on your own Windows laptop. Hold a key, say
+something, and it answers out loud. It opens programs, searches the web,
+writes files, remembers what you tell it, and knows what it said to you
+yesterday.
 
-## Quick start (easiest)
+Nothing runs in the cloud except the model it thinks with, and it falls back
+to a model on the machine when the network or the free allowance is gone.
 
-1. Double-click **setup.bat**. It installs everything, opens the Groq page so you can grab a free key, and starts reo.
-2. Next time, just double-click **run.bat**.
+## Installing it
 
-## Manual setup (Windows, PowerShell)
+Right-click **install.ps1** and choose "Run with PowerShell".
+
+That one file does everything: finds Python or offers to install it, fetches
+reo if you do not have it yet, builds its own private environment, asks for a
+free model key without ever showing it on screen, checks your microphone and
+speaker actually work, and offers to start reo when you sign in.
+
+It is safe to run again at any time - every step checks before it acts.
+
+```powershell
+# the usual way, from inside the folder
+.\install.ps1
+
+# on a machine that has nothing at all
+irm https://raw.githubusercontent.com/OWNER/reo/main/install.ps1 | iex
+
+# ask nothing, start nothing - how it gets tested
+.\install.ps1 -Unattended
+```
+
+Then double-click **run.bat**, hold **Ctrl+Alt+R**, and talk.
+
+The only thing it needs from you is a model key. Groq's free tier is enough
+and takes no card. `set-key.ps1` reads it as a secure string, so it is never
+echoed, never in your shell history, and never in any log - and `.env` is
+gitignored, so it stays on your machine.
+
+### If you would rather do it by hand
 
 1. Install Python 3.11 or newer from python.org (tick "Add to PATH"). Tested on 3.14.
 2. In this folder:
@@ -220,9 +250,9 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-That runs both suites: 417 tests, no API key needed.
+That runs both suites: 435 tests, no API key needed.
 
-`tests/test_reo.py` is the fast one - 402 tests, no microphone, no model. It
+`tests/test_reo.py` is the fast one - 420 tests, no microphone, no model. It
 covers the things that actually broke: exit phrases with punctuation inside
 them, noise transcriptions, emotion tags and repeated answers, tool failures,
 history trimming keeping tool calls paired, contractions reaching the fast
@@ -611,6 +641,7 @@ third of a second, and turned "Sure thing, digital son" into "Digital son".
 - "From now on, if anyone asks who you are, tell them you are my baby"
 - "What did we talk about yesterday?"
 - "What did I tell you about my sister?"
+- "Why are you slow?"
 - "Try again"
 
 ## What was taken from where
@@ -641,6 +672,57 @@ compositing for the glow instead.
 Everything else - the voice detection, the pre-roll, transcribing inside the
 pause, the provider pool, the workspace, undo - is this project's own, and
 most of it exists because something measurable was wrong.
+
+## When something goes wrong
+
+Reo used to die without saying anything. Every session in the log ended on
+`[Press Ctrl+Alt+R to start listening]` and then simply stopped - no goodbye,
+no error, no traceback. Four separate things made that possible:
+
+- **Only stdout was being logged.** A traceback goes to stderr, so a real
+  crash left the log looking like a clean startup followed by nothing. Both
+  go in now.
+- **No exception hook on any thread.** A crash in the barge-in watcher or the
+  microphone pump printed to a stderr nobody was reading and the thread died
+  on the spot, which looks like reo going deaf rather than like a bug.
+- **`handle()` sat outside the main loop's try/except.** One bad reply ended
+  the session.
+- **The voice was unguarded.** `pyttsx3` talks to SAPI over COM, which fails
+  on Windows for its own reasons, and that failure came all the way up. Reo
+  is allowed to lose its voice; it is not allowed to die of it.
+
+It now writes down why it stopped - `===== reo stopped: you said goodbye =====`
+- so the log distinguishes being closed from falling over.
+
+## Asking it where the time goes
+
+Say **"why are you slow"** and it tells you, from its own counters, without
+asking a model anything:
+
+```
+You: why are you slow
+  [time] over 14 replies: heard 4.5s, thought 1.5s, spoke 3.2s, total 9.2s
+  [time] the hosted voice costs about 1.15s of that per reply
+Reo: About 9 seconds a reply, and most of that is listening. That is mostly
+     you talking, which I cannot speed up.
+```
+
+The breakdown is printed rather than read out: spoken in full it ran to about
+twenty-five seconds, which is a strange thing to sit through from something
+being asked why it is slow.
+
+Measured across 117 real replies from the log, the time divides as 4.5s
+listening, 1.5s thinking, 3.2s speaking. Most of the listening is you
+talking. Of the rest:
+
+- **1.5s is the pause that means "done talking"**, waited out at the end of
+  every command. Two attempts at shortening it safely are in the next section
+  and neither worked.
+- **The hosted voice costs about 1.15 seconds a reply.** Measured against the
+  offline one on the same five sentences: 2.72s median against 1.91s. Almost
+  none of that is the network - the first audio arrives in 0.21-0.50s -
+  Orpheus simply speaks more slowly. `REO_TTS=pyttsx3` gets it back, and
+  `REO_SPEECH_SPEED` is the dial in between.
 
 ## Tried, measured, and not shipped
 
