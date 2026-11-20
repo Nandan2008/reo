@@ -1,4 +1,4 @@
-# reo
+﻿# reo
 
 A voice assistant that runs on your own Windows laptop. Hold a key, say
 something, and it answers out loud. It opens programs, searches the web,
@@ -24,7 +24,7 @@ It is safe to run again at any time - every step checks before it acts.
 .\install.ps1
 
 # on a machine that has nothing at all
-irm https://raw.githubusercontent.com/OWNER/reo/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Nandan2008/reo/main/install.ps1 | iex
 
 # ask nothing, start nothing - how it gets tested
 .\install.ps1 -Unattended
@@ -115,7 +115,7 @@ detection.
 
 Detection only ever chooses from `REO_LANGUAGES` (`en,te,hi` by default). Left
 to choose from all ninety-nine, Whisper read an Indian accent as Russian and
-Spanish and wrote fluent nonsense - "Благодарю!" for a question asked in
+Spanish and wrote fluent nonsense - "Ð‘Ð»Ð°Ð³Ð¾Ð´Ð°Ñ€ÑŽ!" for a question asked in
 English. It cannot now answer in a language you do not speak.
 
 ## Things you did not say

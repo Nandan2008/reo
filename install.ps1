@@ -1,10 +1,10 @@
-# reo - one file that installs the whole thing.
+﻿# reo - one file that installs the whole thing.
 #
 #   Right-click this file and choose "Run with PowerShell".
 #
 # Or, on a machine that has nothing yet, paste this into PowerShell:
 #
-#   irm https://raw.githubusercontent.com/OWNER/reo/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/Nandan2008/reo/main/install.ps1 | iex
 #
 # It will, in order: find or install Python, fetch reo if it is not already
 # here, build its own private environment, ask for a free model key without
@@ -22,7 +22,7 @@ param(
     # Where reo should live, if it is not already downloaded.
     [string]$Into = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'reo'),
     # The repository to fetch from, if reo is not already downloaded.
-    [string]$From = 'https://github.com/OWNER/reo',
+    [string]$From = 'https://github.com/Nandan2008/reo',
     # Skip the key step (set it later with set-key.ps1).
     [switch]$NoKey,
     # Do not offer to start reo when you sign in.
@@ -97,7 +97,7 @@ foreach ($candidate in @($here, $Into)) {
 if ($Home_) {
     Good "already here: $Home_"
 } else {
-    if ($From -match 'OWNER/reo') {
+    if ($From -match 'Nandan2008/reo') {
         Stop-With "reo is not in this folder, and no repository was given." `
                   "Download the project first, then run install.ps1 from inside it - or pass -From https://github.com/<owner>/reo"
     }
