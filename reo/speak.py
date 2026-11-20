@@ -46,8 +46,15 @@ def _undouble(text: str) -> str:
     last fragment that the sentence before already said is dropped too. The
     fragment has to be contained in the previous sentence, which leaves
     "I like Rome. Rome is warm." alone.
+
+    The split needs whitespace after the full stop. With \\s* it split on
+    every dot in the string, and then rejoined the pieces with a space - so
+    reo said "Opened https://youtube. com", "I wrote game. py", "that is
+    3. 5 metres" and "version 2. 0. 1". Writing files and saying their names
+    is one of the things reo does most, and it had been mispronouncing every
+    one of them.
     """
-    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s*", text) if p.strip()]
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
     if len(parts) > 1 and len(set(parts)) == 1:
         return parts[0]
     while len(parts) > 1 and _is_echo(parts[-1], parts[-2]):

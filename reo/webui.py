@@ -39,14 +39,34 @@ class Bridge:
     # --- called from the page ---------------------------------------------
 
     def poll(self):
+        """Everything the page wants, and never an exception.
+
+        This is the page's only way in, and it asks four times a second. If
+        anything in here raises, the call fails on the JavaScript side and
+        the window stops updating - it does not recover, because the page has
+        no way to tell a broken bridge from a slow one. stats.rows() has
+        already frozen here once, on a lock that was not reentrant, and every
+        panel in the window went empty.
+
+        So each part is fetched separately and a part that fails is simply
+        missing from this tick. The events are drained first and handed over
+        whatever else happens: losing those loses what reo said.
+        """
         events = []
         try:
             while True:
                 events.append(self._pending.get_nowait())
         except queue.Empty:
             pass
-        return {"events": events, "session": stats.rows(), "device": _device(),
-                "subtitle": self._subtitle}
+
+        answer = {"events": events, "session": [], "device": [],
+                  "subtitle": self._subtitle}
+        for part, fetch in (("session", stats.rows), ("device", _device)):
+            try:
+                answer[part] = fetch()
+            except Exception as e:
+                print(f"  [ui] could not read {part}: {type(e).__name__}: {e}")
+        return answer
 
     def toggle_fullscreen(self):
         if _window is not None:

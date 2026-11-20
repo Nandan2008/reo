@@ -23,7 +23,10 @@ def list_apps() -> str:
     return _list()
 
 
-def open_website(url: str) -> str:
+def open_website(url: str = "") -> str:
+    url = asked_for(url).strip()
+    if not url or "." not in url:
+        return "Say which website, with its address."
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     webbrowser.open(url)
@@ -87,9 +90,12 @@ def _results(query: str, backend=None):
         return []
 
 
-def search_web(query: str) -> str:
+def search_web(query: str = "") -> str:
     """Look something up and hand the text back, so reo can answer out loud."""
-    key = query.strip().lower()
+    query = asked_for(query).strip()
+    if not query:
+        return "Say what to search for."
+    key = query.lower()
     if key in _search_cache:      # the model rewords and retries; don't pay twice
         return _search_cache[key]
 
@@ -114,8 +120,11 @@ def search_web(query: str) -> str:
 PAGE_LIMIT = 3000   # a voice answer needs the gist, not the whole page
 
 
-def read_page(url: str) -> str:
+def read_page(url: str = "") -> str:
     """Fetch a page and return its text, for when a search snippet is not enough."""
+    url = asked_for(url).strip()
+    if not url or "." not in url:
+        return "Say which page, with its address."
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     try:
@@ -135,13 +144,17 @@ WIKI_SEARCH = ("https://en.wikipedia.org/w/api.php?action=query&list=search"
                "&format=json&srlimit=4&srsearch=")
 
 
-def look_up(topic: str) -> str:
+def look_up(topic: str = "") -> str:
     """Wikipedia, through its own API rather than by scraping the page.
 
     Faster than a search and a page read together - about 0.3s - and it comes
     back as a written summary instead of navigation furniture.
     """
     import json as _json
+
+    topic = asked_for(topic).strip()
+    if not topic:
+        return "Say what to look up."
 
     def summary(title: str):
         response = _client(10).get(WIKI_SUMMARY + urllib.parse.quote(title.replace(" ", "_")))
@@ -247,8 +260,11 @@ def play_youtube(query: str, position: int = 1) -> str:
     return f"Playing the {which} result{f': {name}' if name else ''}."
 
 
-def open_search(query: str) -> str:
+def open_search(query: str = "") -> str:
     """Put the results on screen when the user wants to look themselves."""
+    query = asked_for(query).strip()
+    if not query:
+        return "Say what to search for."
     webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(query))
     return f"Opened a search for {query}."
 
@@ -264,14 +280,22 @@ def get_battery() -> str:
     return f"{b.percent:.0f}% ({'charging' if b.power_plugged else 'on battery'})"
 
 
-def type_text(text: str, window: str = None, enter: bool = False) -> str:
+def type_text(text: str = "", window: str = None, enter: bool = False) -> str:
     from .keys import type_text as _type
-    return _type(text, window, enter)
+
+    # Not stripped: he asks reo to type code, and the indentation is the code.
+    text = asked_for(text)
+    if not text.strip():
+        return "Say what to type."
+    return _type(text, asked_for(window) or None, bool(enter))
 
 
-def press_key(key: str, window: str = None) -> str:
+def press_key(key: str = "", window: str = None) -> str:
     from .keys import press_key as _press
-    return _press(key, window)
+    key = asked_for(key).strip()
+    if not key:
+        return "Say which key to press."
+    return _press(key, asked_for(window) or None)
 
 
 def list_windows() -> str:
@@ -279,9 +303,13 @@ def list_windows() -> str:
     return _list()
 
 
-def run_command(command: str, confirmed: bool = False) -> str:
+def run_command(command: str = "", confirmed: bool = False) -> str:
     from .shell import run_command as _run
-    return _run(command, confirmed)
+
+    command = asked_for(command).strip()
+    if not command:
+        return "Say which command to run."
+    return _run(command, bool(confirmed))
 
 
 FUNCTIONS = {
@@ -639,6 +667,29 @@ READ_ONLY = frozenset({
     "recall", "list_apps", "list_windows", "cursor_position",
     "read_file", "list_files", "past_chats",
 })
+
+
+def asked_for(value, instead: str = "") -> str:
+    """What the model meant, as text.
+
+    It sends null for a parameter it has nothing to put in, and sometimes a
+    number where a word belongs - "type 123". Eight tools raised on that,
+    and because run_tool turns an exception into the answer, what he heard
+    was "Tool search_web failed: \'NoneType\' object has no attribute
+    \'strip\'".
+
+    Whitespace is left exactly as it came: type_text types code, and
+    collapsing it would be worse than the bug.
+    """
+    if value is None:
+        return instead
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):          # before int: bool is an int
+        return instead
+    if isinstance(value, (int, float)):
+        return str(value)
+    return instead
 
 
 def run_tool(name: str, args: dict) -> str:

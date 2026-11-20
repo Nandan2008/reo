@@ -25,6 +25,8 @@ from reo import stats as stats_module
 from reo import chats as chatsmod
 from reo.chats import Chats
 from reo import pointer
+from reo import webui
+from reo import shell as shell_module
 from reo import undo
 from reo import workspace
 from reo import system as reo_system
@@ -588,12 +590,20 @@ class ToolFailures(unittest.TestCase):
     def test_unknown_tool(self):
         self.assertIn("Unknown tool", tools.run_tool("fly_to_moon", {}))
 
-    def test_bad_arguments_do_not_raise(self):
+    def test_a_wrong_keyword_is_reported_rather_than_raised(self):
+        """The model inventing a parameter is its mistake, and run_tool hands
+        it back so it can try again."""
         for name, args in [("open_app", {"app": "notepad"}),
-                           ("search_web", {}),
                            ("get_datetime", {"tz": "UTC"})]:
             with self.subTest(name=name):
                 self.assertIn("failed", tools.run_tool(name, args))
+
+    def test_a_missing_argument_says_what_is_missing(self):
+        """This used to say "Tool search_web failed: ... object has no
+        attribute 'strip'", and that reached him as the answer."""
+        said = tools.run_tool("search_web", {})
+        self.assertNotIn("failed", said)
+        self.assertIn("what to search for", said)
 
     def test_readonly_tools_answer(self):
         self.assertTrue(tools.get_datetime())
@@ -4362,6 +4372,263 @@ class AnyoneCanInstallIt(unittest.TestCase):
         for script in ("setup.bat", "install.ps1"):
             text = (self.ROOT / script).read_text(encoding="utf-8")
             self.assertIn("3.14", text, script)
+
+
+class TheWindow(unittest.TestCase):
+    """The window is the whole visible product and had no tests at all.
+
+    poll() is the page's only way in and it asks four times a second. If
+    anything in there raises, the call fails on the JavaScript side and the
+    window stops updating for good - the page cannot tell a broken bridge
+    from a slow one. stats.rows() has already frozen there once, on a lock
+    that was not reentrant, and every panel went empty."""
+
+    def _bridge(self):
+        from reo.webui import Bridge
+        return Bridge()
+
+    def test_what_reo_said_comes_through(self):
+        bridge = self._bridge()
+        bridge._pending.put(["state", "listening"])
+        bridge._pending.put(["line", "reo", "Lima."])
+        answer = bridge.poll()
+        self.assertEqual(answer["events"],
+                         [["state", "listening"], ["line", "reo", "Lima."]])
+
+    def test_the_events_are_drained_not_repeated(self):
+        bridge = self._bridge()
+        bridge._pending.put(["line", "you", "hello"])
+        self.assertEqual(len(bridge.poll()["events"]), 1)
+        self.assertEqual(bridge.poll()["events"], [])
+
+    def test_a_broken_panel_does_not_break_the_window(self):
+        bridge = self._bridge()
+        said = io.StringIO()
+        with mock.patch.object(webui, "stats",
+                               SimpleNamespace(rows=mock.Mock(
+                                   side_effect=RuntimeError("deadlocked")))), \
+             contextlib.redirect_stdout(said):
+            bridge._pending.put(["line", "reo", "still here"])
+            answer = bridge.poll()
+        # the panel is empty for this tick, and that is all
+        self.assertEqual(answer["session"], [])
+        self.assertEqual(answer["events"], [["line", "reo", "still here"]])
+        self.assertIn("could not read session", said.getvalue())
+
+    def test_a_broken_device_panel_is_the_same(self):
+        bridge = self._bridge()
+        with mock.patch.object(webui, "_device",
+                               side_effect=OSError("no psutil")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            answer = bridge.poll()
+        self.assertEqual(answer["device"], [])
+        self.assertIsInstance(answer["session"], list)
+
+    def test_the_panels_are_what_the_page_can_draw(self):
+        """Pairs of strings, and a number only where there is a bar."""
+        bridge = self._bridge()
+        for row in bridge.poll()["session"]:
+            self.assertEqual(len(row), 2, row)
+            self.assertTrue(all(isinstance(cell, str) for cell in row), row)
+        for row in bridge.poll()["device"]:
+            self.assertIn(len(row), (2, 3), row)
+            self.assertIsInstance(row[0], str)
+
+    def test_the_page_it_loads_is_actually_there(self):
+        self.assertTrue(webui.PAGE.exists(), webui.PAGE)
+        page = webui.PAGE.read_text(encoding="utf-8", errors="replace")
+        # the page pulls; python never pushes. If this is gone, nothing in
+        # the window ever updates.
+        self.assertIn("poll", page)
+
+    def test_closing_the_window_is_noticed(self):
+        with mock.patch.object(webui.webview, "create_window",
+                               lambda *a, **kw: SimpleNamespace(
+                                   events=SimpleNamespace(closed=_Signal()))):
+            display = webui.Display(subtitle="press the key")
+        self.assertFalse(display.closed)
+        display._on_closed()
+        self.assertTrue(display.closed)
+
+    def test_the_voice_thread_only_ever_queues(self):
+        """set_state and line are called while reo is answering. Neither may
+        touch the window: WebView2 only allows calls from its own thread."""
+        with mock.patch.object(webui.webview, "create_window",
+                               lambda *a, **kw: SimpleNamespace(
+                                   events=SimpleNamespace(closed=_Signal()))):
+            display = webui.Display()
+        display.set_state("thinking")
+        display.line("reo", "Lima.")
+        self.assertEqual(display.bridge.poll()["events"],
+                         [["state", "thinking"], ["line", "reo", "Lima."]])
+
+
+class _Signal:
+    """Stands in for pywebview's event slot, which is used with +=."""
+
+    def __iadd__(self, handler):
+        return self
+
+
+class WhatTheModelActuallySends(unittest.TestCase):
+    """Every one of the 28 tools was given the arguments a misheard command
+    turns into - nothing, an empty string, a null, a number where a word
+    belongs. Eight of them raised. run_tool catches it, so reo does not die,
+    but the exception becomes the answer: what he heard was "Tool search_web
+    failed: 'NoneType' object has no attribute 'strip'"."""
+
+    NONSENSE = [{}, {"query": None}, {"query": ""}, {"name": None},
+                {"text": None}, {"text": 123}, {"url": None}, {"url": ""},
+                {"key": None}, {"topic": None}, {"command": None},
+                {"about": None}, {"fact": None}, {"answer": None},
+                {"action": None}, {"app": None}]
+
+    def test_no_tool_hands_back_an_exception(self):
+        import webbrowser
+        from reo import apps as apps_module
+
+        home = Path(tempfile.mkdtemp(prefix="reo-fuzz-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        with mock.patch.object(config, "WORKSPACE", str(home)), \
+             mock.patch.object(webbrowser, "open", lambda *a, **kw: True), \
+             mock.patch.object(apps_module, "_powershell",
+                               lambda *a, **kw: "NOTFOUND"), \
+             mock.patch.object(reo_system, "control", lambda a, n=0: "Done."), \
+             contextlib.redirect_stdout(io.StringIO()):
+            for name in sorted(tools.FUNCTIONS):
+                for args in self.NONSENSE:
+                    said = tools.run_tool(name, dict(args))
+                    if said.startswith(f"Tool {name} failed"):
+                        # a wrong keyword is the model's mistake, not a bug
+                        if any(w in said for w in ("unexpected keyword",
+                                                   "required positional",
+                                                   "missing 1 required")):
+                            continue
+                        self.fail(f"{name}({args}) -> {said}")
+
+    def test_a_null_is_read_as_nothing_said(self):
+        self.assertEqual(tools.asked_for(None), "")
+        self.assertEqual(tools.asked_for(None, "fallback"), "fallback")
+
+    def test_a_number_is_read_as_the_number(self):
+        """"type 123" arrives as a number."""
+        self.assertEqual(tools.asked_for(123), "123")
+        self.assertEqual(tools.asked_for(1.5), "1.5")
+
+    def test_a_true_is_not_read_as_one(self):
+        """bool is an int, and typing "True" is not what was meant."""
+        self.assertEqual(tools.asked_for(True), "")
+
+    def test_the_spacing_in_what_it_types_is_left_alone(self):
+        """He asks reo to type code, and the indentation is the code."""
+        code = "def f():\n    return 1\n"
+        self.assertEqual(tools.asked_for(code), code)
+
+    def test_each_one_says_what_is_missing(self):
+        for name, args, wanted in [
+                ("search_web", {"query": None}, "what to search"),
+                ("look_up", {"topic": None}, "what to look up"),
+                ("open_website", {"url": None}, "which website"),
+                ("read_page", {"url": None}, "which page"),
+                ("press_key", {"key": None}, "which key"),
+                ("type_text", {"text": None}, "what to type"),
+                ("run_command", {"command": None}, "which command"),
+                ("open_search", {"query": None}, "what to search")]:
+            said = tools.run_tool(name, args)
+            self.assertIn(wanted, said.lower(), f"{name}: {said}")
+
+    def test_an_empty_command_is_not_run(self):
+        """It was. The shell printed "[shell] running:" and ran nothing."""
+        ran = []
+        with mock.patch.object(shell_module, "run_command",
+                               lambda c, confirmed=False: ran.append(c) or "ran"):
+            tools.run_tool("run_command", {"command": "   "})
+        self.assertEqual(ran, [])
+
+
+class SayingNamesProperly(unittest.TestCase):
+    """Found by driving the real brain through twenty commands and reading
+    what it said: "Opened https://youtube. com." and "Put the earlier
+    print_primes. py back."
+
+    _undouble split on every dot rather than on a full stop followed by a
+    space, then rejoined the pieces with a space. Writing files and saying
+    their names is one of the things reo does most, and it had been
+    mispronouncing every one of them. 451 tests did not notice."""
+
+    def test_a_filename_keeps_its_extension(self):
+        for said in ["Wrote game.py to your folder.",
+                     "Put the earlier print_primes.py back.",
+                     "The file is at C:/Users/kollu/notes.txt.",
+                     "I made notes.md and todo.txt."]:
+            self.assertEqual(speak_module.said_aloud(said), said, said)
+
+    def test_a_web_address_stays_in_one_piece(self):
+        for said in ["Opened https://youtube.com.",
+                     "Opened mail.google.com.",
+                     "It is on en.wikipedia.org."]:
+            self.assertEqual(speak_module.said_aloud(said), said, said)
+
+    def test_a_number_with_a_decimal_point_stays_a_number(self):
+        for said in ["That is 3.5 metres.", "Version 2.0.1 is out.",
+                     "It took 0.27 seconds."]:
+            self.assertEqual(speak_module.said_aloud(said), said, said)
+
+    def test_an_abbreviation_is_left_alone(self):
+        self.assertEqual(speak_module.said_aloud("Use e.g. a shorter name."),
+                         "Use e.g. a shorter name.")
+
+    def test_the_answer_said_twice_is_still_said_once(self):
+        """Which is what _undouble is for, and what the loose split was
+        buying. It needs a space after the full stop, and gpt-oss puts one."""
+        self.assertEqual(speak_module.said_aloud("The capital of Peru is Lima. Lima."),
+                         "The capital of Peru is Lima.")
+        self.assertEqual(speak_module.said_aloud("Lima. Lima."), "Lima.")
+
+    def test_two_real_sentences_are_both_kept(self):
+        for said in ["I like Rome. Rome is warm.",
+                     "Chrome is open. It took a moment."]:
+            self.assertEqual(speak_module.said_aloud(said), said, said)
+
+
+class TheWakeWordPath(unittest.TestCase):
+    """He runs reo on the hotkey, so none of this is exercised day to day -
+    which is exactly how it rots. These are smoke tests: they check the parts
+    hold together, not that the models are any good."""
+
+    def test_the_phrase_engine_names_itself_readably(self):
+        from reo import phrase
+        # lower case on purpose: it is shown inside quotes, as say "hey jarvis"
+        self.assertEqual(phrase.pretty("hey_jarvis"), "hey jarvis")
+        self.assertTrue(phrase.pretty(config.WAKE_PHRASE))
+
+    def test_what_the_user_is_told_to_say_matches_the_engine(self):
+        with mock.patch.object(config, "WAKE_ENGINE", "phrase"):
+            self.assertEqual(main.woken_by(), "hey jarvis")
+        with mock.patch.object(config, "WAKE_ENGINE", "whisper"):
+            self.assertEqual(main.woken_by(), config.WAKE_NAME)
+
+    def test_the_names_it_answers_to_include_the_near_misses(self):
+        """A weak microphone turns "reo" into "rio" and "rayo"."""
+        self.assertIn(config.WAKE_NAME, config.WAKE_WORDS)
+        self.assertGreater(len(config.WAKE_WORDS), 1)
+
+    def test_the_whisper_engine_hears_its_name_in_a_sentence(self):
+        """It transcribes the room and looks for the name in what came back,
+        so it has to find it and hand back what followed it."""
+        from reo.wake import WakeListener
+        for said, name, after in [
+                ("reo what time is it", True, "what time is it"),
+                ("rio open chrome", True, "open chrome"),
+                ("hey reo", True, ""),
+                ("the weather is nice", False, None)]:
+            words = normalize(said).split()
+            self.assertEqual(any(WakeListener._is_name(w) for w in words),
+                             name, said)
+            if name:
+                self.assertEqual(
+                    (WakeListener._command_after_wake(normalize(said)) or "").strip(),
+                    after, said)
 
 
 if __name__ == "__main__":

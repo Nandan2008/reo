@@ -250,9 +250,9 @@ falls back to the offline voice, so this is safe to leave switched on.
 python -m unittest discover -s tests -t .
 ```
 
-That runs both suites: 435 tests, no API key needed.
+That runs both suites: 461 tests, no API key needed.
 
-`tests/test_reo.py` is the fast one - 420 tests, no microphone, no model. It
+`tests/test_reo.py` is the fast one - 446 tests, no microphone, no model. It
 covers the things that actually broke: exit phrases with punctuation inside
 them, noise transcriptions, emotion tags and repeated answers, tool failures,
 history trimming keeping tool calls paired, contractions reaching the fast
@@ -723,6 +723,35 @@ talking. Of the rest:
   none of that is the network - the first audio arrives in 0.21-0.50s -
   Orpheus simply speaks more slowly. `REO_TTS=pyttsx3` gets it back, and
   `REO_SPEECH_SPEED` is the dial in between.
+
+## What a long session found
+
+The unit suite had 435 tests passing when the real brain was driven through
+twenty commands, the way he actually uses it, with every side effect stood in
+for and recorded. Two things came out of that which no test had noticed.
+
+**Reo was mispronouncing every filename it had ever written.** It said
+"Opened https://youtube. com" and "Put the earlier print_primes. py back".
+The function that stops gpt-oss saying its answer twice was splitting on
+every dot rather than on a full stop followed by a space, then rejoining the
+pieces with a space - so URLs, filenames, decimals and abbreviations all came
+apart. "Version 2.0.1" was read as "version 2. 0. 1".
+
+**Eight of the twenty-eight tools crashed on what the model actually sends.**
+Fuzzed with the arguments a misheard command turns into - nothing, an empty
+string, a null, a number where a word belongs - eight raised. 
+catches it, so reo does not die, but the exception becomes the answer: what
+he heard was "Tool search_web failed: 'NoneType' object has no attribute
+'strip'". They say what is missing now. An empty command was also being
+handed to the shell and run.
+
+The window had no tests at all, which is a strange gap for the whole visible
+part of the thing.  is the page's only way in and it asks four times
+a second; anything raising in there failed the call on the JavaScript side
+and the window stopped updating for good, because the page cannot tell a
+broken bridge from a slow one.  had already frozen there once.
+Each panel is fetched separately now, and a panel that fails is simply
+missing for that tick.
 
 ## Tried, measured, and not shipped
 
