@@ -49,6 +49,24 @@ MODEL = ("kenrunio/transcriber-speaker-onnx", "ecapa-any-length.onnx")
 # nearer the stranger's end, because turning him away is the worse mistake.
 ALIKE = config.VOICE_MATCH
 # Seconds of actual speech needed before the question is worth asking.
+# Measured, rather than guessed at - the same voice against itself and
+# against another, at increasing amounts of voiced audio:
+#
+#     voiced    same voice   another    margin
+#      0.51s        0.454      0.237      0.22
+#      0.70s        0.586      0.291      0.30
+#      1.09s        0.706      0.350      0.36
+#      1.41s        0.756      0.283      0.47
+#      2.88s        0.891      0.271      0.62
+#
+# Half a second of speech puts his own voice at 0.454 against a threshold of
+# 0.45 - one hundredth from being turned away, before any of the noise and
+# distance of a real room. Past about a second it is never close.
+#
+# For scale: his diagnose.wav is six seconds long and holds 1.73 seconds of
+# speech, and its two halves have 1.02s and 0.77s. Both are under this, so
+# reo would decline to judge either - which is the right answer, and is why
+# they score 0.07 against each other.
 ENOUGH = 1.2
 # Takes to enrol from, and how well they must agree before this is trusted.
 TAKES = 3
@@ -159,8 +177,12 @@ class Voiceprint:
                 }), encoding="utf-8")
             except OSError as e:
                 return False, f"I could not save that ({e})."
-        return True, ("Got your voice. I will only answer you now. Say forget "
-                      "my voice to undo it.")
+        # The number is said out loud on purpose. It is the one thing that
+        # says whether this will actually work in his room, and he is the
+        # only one who can hear the result.
+        return True, (f"Got your voice, and your takes matched at "
+                      f"{agreement:.2f} out of one. I will only answer you "
+                      f"now. Say forget my voice to undo it.")
 
     # --- using it ---------------------------------------------------------
 

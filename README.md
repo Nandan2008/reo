@@ -706,6 +706,36 @@ The model is SpeechBrain's ECAPA-TDNN converted to ONNX, so it runs on
 installed - `onnxruntime` and `huggingface_hub` already come with the speech
 model - and downloads itself on first use.
 
+### How much speech it needs
+
+Measured, rather than guessed at - the same voice against itself and against
+another, at increasing amounts of actual speech:
+
+| voiced speech | same voice | another | margin |
+|---|---|---|---|
+| 0.51s | **0.454** | 0.237 | 0.22 |
+| 0.70s | 0.586 | 0.291 | 0.30 |
+| 1.09s | 0.706 | 0.350 | 0.36 |
+| 1.41s | 0.756 | 0.283 | 0.47 |
+| 2.88s | 0.891 | 0.271 | 0.62 |
+
+Half a second of speech puts your own voice at 0.454 against a threshold of
+0.45 - one hundredth from being turned away, before any of the noise and
+distance of a real room. Past about a second it is never close. So anything
+with under 1.2 seconds of speech in it is not judged at all.
+
+For scale, `diagnose.wav` is six seconds long and holds **1.73 seconds** of
+speech; its two halves have 1.02s and 0.77s. Both are under the bar, so reo
+declines to judge either - which is the right answer, and is why they score
+0.07 against each other. A sparse diagnostic recording is not what an
+ordinary command sounds like, but it is a good reminder that the length of a
+clip and the amount of speech in it are different numbers.
+
+Enrolment asks for at least as much speech as verification will later get,
+and tells you the number its takes agreed on. That number is the only thing
+that says whether this works in your room, and you are the only one who can
+hear it.
+
 **The one thing this must never do is make reo deaf to you.** So:
 
 - A clip too short to judge is let through, not refused. Your own

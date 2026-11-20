@@ -67,6 +67,31 @@ def _which_model() -> str:
     return f"I think with {thinking}, and I hear you with {ear}."
 
 
+def _whose_voice() -> str:
+    """Whether reo has been taught a voice, and how well it took.
+
+    Worth asking out loud: the number from enrolment is the only thing that
+    says whether this works in his room, and he is the only one who can hear
+    the answer.
+    """
+    import json
+
+    from .voiceprint import voiceprint
+
+    if not voiceprint.enrolled:
+        return ("I answer anyone. Say remember my voice and I will learn "
+                "yours.")
+    try:
+        kept = json.loads(voiceprint.path.read_text(encoding="utf-8"))
+        agreement = float(kept.get("agreement", 0))
+        when = kept.get("since", "")
+    except (OSError, ValueError, TypeError):
+        return "I know your voice, and I only answer you."
+    return (f"I know your voice - learnt {when}, and your recordings matched "
+            f"at {agreement:.2f} out of one. I only answer you. Say forget "
+            f"my voice to undo that.")
+
+
 def _where_files_go() -> str:
     return f"Everything I write goes in {config.WORKSPACE}."
 
@@ -92,6 +117,10 @@ ABOUT = [
     (r"(what|which) (model|brain|ai) (are you|do you) (using|use|run on|running)"
      r"|what are you (built|running) on|what model are you"
      r"|(what|which) model is (this|that)", _which_model),
+    (r"(do you )?(know|remember|recognise|recognize) my voice"
+     r"|whose voice (do you|are you) (know|answer|answering|listening to)"
+     r"|do you only (answer|respond to) me"
+     r"|have you learn(t|ed) my voice", _whose_voice),
     (r"where do you (put|save|write|keep) (the |my |your )?(files|code|things|stuff)"
      r"|where (do|does) (the |my |your )?(files|code) go"
      r"|wheres your folder|where is your folder", _where_files_go),

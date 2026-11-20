@@ -114,7 +114,7 @@ def _learn_his_voice(listener, ui, toggle, cut_in) -> None:
     before anything is stored - a voiceprint that cannot recognise its own
     owner would simply stop reo answering him.
     """
-    from .voiceprint import TAKES, voiceprint
+    from .voiceprint import ENOUGH, TAKES, voiceprint
 
     _said(f"Say something ordinary, {TAKES} times, a few seconds each. "
           f"Go ahead.", ui, toggle, cut_in)
@@ -126,9 +126,11 @@ def _learn_his_voice(listener, ui, toggle, cut_in) -> None:
                         if toggle is not None else None)
         clip = getattr(listener, "last_audio", None)
         voiced = getattr(listener, "last_voice", 0.0)
-        if clip is None or voiced < 1.0:
-            _said("I did not get enough of that one. Say a bit more.",
-                  ui, toggle, cut_in)
+        if clip is None or voiced < ENOUGH:
+            # Enrolled from less speech than it will later be asked to judge,
+            # the voiceprint is worse than the thing it is compared against.
+            _said(f"That was only {voiced:.1f} seconds of speech. "
+                  f"Say a whole sentence.", ui, toggle, cut_in)
             continue
         takes.append(clip)
         if number < TAKES:
