@@ -662,21 +662,54 @@ clip cut mid-word - *and completed the word* - while a genuinely finished
 | "Hello, hello" whole | `Hello, hello` | **no** |
 
 **A model that hears whether a sentence is finished.** Pipecat's Smart Turn
-v3.2 is the right shape for this - 8M parameters, an 8.7MB int8 ONNX file,
-BSD-2-Clause, 16kHz mono, one sigmoid out, and `onnxruntime` is already
-installed here. Its reference code builds features with
-`transformers.WhisperFeatureExtractor(chunk_length=8)`, and `transformers`
-is not installed. Built instead from faster-whisper's own extractor, which
-produces the same (80, 800) log-mel, the model separates speech from silence
-but not finished from unfinished - the same clips as above all score 0.50 or
-0.73 whatever the recipe. Four variants were tried (raw audio standardised or
-not, padding at the front or the back). That is a feature mismatch rather than
-a verdict on the model, and settling it needs `transformers` installed.
+v3.2 is exactly the right shape - 8M parameters, an 8.7MB int8 ONNX file,
+BSD-2-Clause, 16kHz mono, one number out, `onnxruntime` already installed
+here, and 28ms a check on this laptop. It was tried properly and it is a no.
 
-Worth knowing before anyone tries again: the failure mode is cutting him off
-mid-sentence, which is the exact bug the 1.5s wait exists to prevent, and the
-published 94% accuracy figure is measured on the model's own test
-distribution. It would need checking on his accent before it could be trusted.
+The first attempt at measuring it was wrong twice over, and both mistakes are
+worth recording because they both made it look broken when it was not:
+
+- The output is named `logits` but is already a probability - every value
+  comes back inside (0, 1). Putting a sigmoid on it squashed everything into
+  0.50-0.73, which looks exactly like a model that has no opinion.
+- The clips labelled "truncated" were cut by eye, and several of them
+  contained the whole word. `faster-whisper` gives word timings, so the real
+  boundaries in his recording are: I 0.00-1.12, am 1.12-1.26, from 1.26-1.42,
+  Hyderabad. 1.42-1.90, Hello. 3.94-4.74, Hello. 5.42-5.82.
+
+Relabelled from those timings, with every clip contiguous from 0.0, it scores
+**11 of 14** - a model that works. But that test cuts the audio dead at the
+stopping point, and that is not what reo has in hand. Reo asks this question
+after hearing 0.45s of quiet. Appending the real room tone that follows in
+his own recording, which is what the recorder would actually pass it:
+
+| what he had said | says finished | should be |
+|---|---|---|
+| "...Hyderabad." then quiet | 0.928 | finished |
+| the whole thing then quiet | 0.765 | finished |
+| "I" then quiet | **0.979** | unfinished |
+| "I am" then quiet | 0.031 | unfinished |
+| "I am from" then quiet | **0.979** | unfinished |
+| mid-"Hyderabad" then quiet | **0.882** | unfinished |
+| mid-"Hello" then quiet | **0.985** | unfinished |
+
+Four of eight, and the failures are the ones that matter: it is 98% sure he
+has finished after "I am from". That is the "Abad" bug - reo stopping
+recording mid-sentence and transcribing half of it - with a model's
+confidence behind it, and no threshold separates 0.979 from 0.928.
+
+`transformers` was installed to settle whether this was a feature mismatch.
+It is not: its `WhisperFeatureExtractor(chunk_length=8)` and faster-whisper's
+own extractor produce the same (80, 800) log-mel and **identical** scores to
+three decimal places, on every clip. So the features were never the problem,
+no dependency was needed, and `transformers` has been uninstalled again.
+
+One honest caveat on the other side: this is one six-second diagnostic
+recording, and an odd one - the word "I" occupies 1.12 seconds of it. The
+model may well do what it says on ordinary conversational speech. But it
+would have to be measured on recordings of him actually pausing mid-sentence
+before it could be trusted to end a recording, and there are none. The
+published 94% figure is measured on the model's own test distribution.
 
 **Groq's prompt caching.** The docs say cached tokens do not count towards
 rate limits, which would matter enormously: the limit reo actually hits is
