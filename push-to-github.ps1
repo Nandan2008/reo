@@ -129,5 +129,5 @@ if ($LASTEXITCODE -ne 0) { Stop-With "the push failed - the message above says w
 Write-Host ""
 Write-Host "  Done. $where" -ForegroundColor Green
 Write-Host "  Anyone can now install it with:" -ForegroundColor DarkGray
-Write-Host "      irm https://raw.githubusercontent.com/$who/$Name/$branch/install.ps1 | iex" -ForegroundColor White
+Write-Host "      irm https://raw.githubusercontent.com/$who/$Name/HEAD/install.ps1 | iex" -ForegroundColor White
 Write-Host ""

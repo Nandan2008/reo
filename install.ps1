@@ -4,7 +4,7 @@
 #
 # Or, on a machine that has nothing yet, paste this into PowerShell:
 #
-#   irm https://raw.githubusercontent.com/Nandan2008/reo/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/Nandan2008/reo/HEAD/install.ps1 | iex
 #
 # It will, in order: find or install Python, fetch reo if it is not already
 # here, build its own private environment, ask for a free model key without

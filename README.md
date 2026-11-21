@@ -24,7 +24,7 @@ It is safe to run again at any time - every step checks before it acts.
 .\install.ps1
 
 # on a machine that has nothing at all
-irm https://raw.githubusercontent.com/Nandan2008/reo/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Nandan2008/reo/HEAD/install.ps1 | iex
 
 # ask nothing, start nothing - how it gets tested
 .\install.ps1 -Unattended
